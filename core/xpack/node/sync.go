@@ -215,7 +215,7 @@ func remoteSize(node, p string) int64 {
 			}
 		}
 	}
-	if resp.StatusCode == http.StatusOK {
+	if resp.StatusCode == http.StatusOK && !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
 		return resp.ContentLength
 	}
 	return -1
@@ -291,7 +291,8 @@ func copyFile(src, srcPath, dst, dstDir, rename string, cb func(int)) error {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	// the agent reports failures (missing file, denied path) as a JSON body with HTTP 200
+	if resp.StatusCode != http.StatusOK || strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
 		return fmt.Errorf("read %s on %s: %s", srcPath, src, strings.TrimSpace(string(b)))
 	}

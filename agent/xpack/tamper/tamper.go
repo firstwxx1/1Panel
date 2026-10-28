@@ -369,6 +369,9 @@ func (s *Store) Scan(alias, root string) []Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cfg := s.cfg.Sites[alias]
+	if !cfg.Enabled { // a disabled site must never be touched, not even by a manual scan
+		return nil
+	}
 	base := s.loadBaselineLocked(alias)
 	if base == nil {
 		return nil
