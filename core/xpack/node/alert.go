@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -113,6 +114,25 @@ func GetAlertConfig() AlertConfig {
 	return c
 }
 
+var (
+	reChatID  = regexp.MustCompile(`^(-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$`) // numeric id or @channel
+	reBotTok  = regexp.MustCompile(`^\d{5,20}:[A-Za-z0-9_-]{30,}$`)
+	errChatID = fmt.Errorf("Chat ID 格式不对：应为数字（群组以 - 开头）或 @频道名，Bot Token 请填在 Token 栏")
+)
+
+func checkTelegram(tg AlertTelegram) error {
+	if tg.ChatID != "" && !reChatID.MatchString(tg.ChatID) {
+		return errChatID
+	}
+	if tg.Token != "" && !reBotTok.MatchString(tg.Token) {
+		return fmt.Errorf("Bot Token 格式不对：应形如 123456789:AAxxxx")
+	}
+	if tg.Enabled && (tg.Token == "" || tg.ChatID == "") {
+		return fmt.Errorf("启用 Telegram 通知需要同时填写 Bot Token 和 Chat ID")
+	}
+	return nil
+}
+
 func SaveAlertConfig(in AlertConfig) error {
 	alertMu.Lock()
 	defer alertMu.Unlock()
@@ -123,6 +143,9 @@ func SaveAlertConfig(in AlertConfig) error {
 	in.Telegram.Token = strings.TrimSpace(in.Telegram.Token)
 	in.Telegram.ChatID = strings.TrimSpace(in.Telegram.ChatID)
 	in.Telegram.Proxy = strings.TrimSpace(in.Telegram.Proxy)
+	if err := checkTelegram(in.Telegram); err != nil {
+		return err
+	}
 	if in.Interval < 30 {
 		in.Interval = 30
 	}
@@ -215,8 +238,12 @@ func effectiveTelegram(in AlertTelegram) AlertTelegram {
 
 func TestTelegram(in AlertTelegram) error {
 	tg := effectiveTelegram(in)
-	if strings.TrimSpace(tg.ChatID) == "" {
+	tg.ChatID = strings.TrimSpace(tg.ChatID)
+	if tg.ChatID == "" {
 		return fmt.Errorf("chat id is empty")
+	}
+	if !reChatID.MatchString(tg.ChatID) {
+		return errChatID
 	}
 	return tgCall(tg, "sendMessage", map[string]interface{}{"chat_id": strings.TrimSpace(tg.ChatID), "text": "✅ 1Panel 告警通知测试：连接正常"}, nil)
 }

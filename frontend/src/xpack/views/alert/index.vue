@@ -11,11 +11,11 @@
                     <el-form-item :label="$t('pro.alert.enable')">
                         <el-switch v-model="cfg.telegram.enabled" />
                     </el-form-item>
-                    <el-form-item :label="$t('pro.alert.token')">
+                    <el-form-item :label="$t('pro.alert.token')" :error="tokenErr">
                         <el-input v-model="cfg.telegram.token" show-password placeholder="123456:ABC-DEF..." />
                         <div class="hint">{{ $t('pro.alert.tokenHint') }}</div>
                     </el-form-item>
-                    <el-form-item :label="$t('pro.alert.chatId')">
+                    <el-form-item :label="$t('pro.alert.chatId')" :error="chatErr">
                         <div class="row">
                             <el-input v-model="cfg.telegram.chatId" />
                             <el-button :loading="fetching" @click="fetchChats">{{ $t('pro.alert.fetchChat') }}</el-button>
@@ -84,7 +84,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
     AlertConfig,
@@ -115,6 +115,33 @@ const groups = [
 ];
 const hasThreshold = ['cert_expire', 'site_5xx', 'waf_attack'];
 
+// same rules as the backend: numeric id (groups start with -) or @channel; token like 123456789:AA...
+const reChatID = /^(-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$/;
+const reBotTok = /^\d{5,20}:[A-Za-z0-9_-]{30,}$/;
+const chatErr = computed(() => {
+    const v = (cfg.value?.telegram.chatId || '').trim();
+    if (!v) return '';
+    if (reBotTok.test(v)) return t('pro.alert.chatIsToken');
+    return reChatID.test(v) ? '' : t('pro.alert.chatInvalid');
+});
+const tokenErr = computed(() => {
+    const v = (cfg.value?.telegram.token || '').trim();
+    return !v || v === '********' || reBotTok.test(v) ? '' : t('pro.alert.tokenInvalid');
+});
+const checkChannel = (forTest: boolean) => {
+    const tg = cfg.value!.telegram;
+    const err = chatErr.value || tokenErr.value;
+    if (err) {
+        ElMessage.error(err);
+        return false;
+    }
+    if ((forTest || tg.enabled) && !(tg.chatId || '').trim()) {
+        ElMessage.error(t('pro.alert.chatRequired'));
+        return false;
+    }
+    return true;
+};
+
 const loadCfg = async () => {
     const res = await getAlertConfig();
     cfg.value = res.data;
@@ -131,6 +158,7 @@ const onTab = (k: any) => {
     if (k === 'records') loadRecords();
 };
 const save = async () => {
+    if (!checkChannel(false)) return;
     saving.value = true;
     try {
         await saveAlertConfig(cfg.value!);
@@ -141,6 +169,7 @@ const save = async () => {
     }
 };
 const test = async () => {
+    if (!checkChannel(true)) return;
     testing.value = true;
     try {
         await testTelegram(cfg.value!.telegram);
