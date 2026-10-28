@@ -158,33 +158,37 @@ func Start() {
 	} else {
 		server.Addr = fmt.Sprintf("0.0.0.0:%s", global.CONF.Base.Port)
 		global.LOG.Infof("agent startup: node mode, preparing https listener %s", server.Addr)
-		settingRepo := repo.NewISettingRepo()
-		certItem, err := settingRepo.Get(settingRepo.WithByKey("ServerCrt"))
-		if err != nil {
-			panic(err)
-		}
-		cert, _ := encrypt.StringDecrypt(certItem.Value)
-		keyItem, err := settingRepo.Get(settingRepo.WithByKey("ServerKey"))
-		if err != nil {
-			panic(err)
-		}
-		key, _ := encrypt.StringDecrypt(keyItem.Value)
-		tlsCert, err := tls.X509KeyPair([]byte(cert), []byte(key))
-		if err != nil {
-			fmt.Printf("failed to load X.509 key pair: %s\n", err)
-			return
-		}
+		if tlsConf, ok := loadNodeFileTLS(); ok {
+			server.TLSConfig = tlsConf
+		} else {
+			settingRepo := repo.NewISettingRepo()
+			certItem, err := settingRepo.Get(settingRepo.WithByKey("ServerCrt"))
+			if err != nil {
+				panic(err)
+			}
+			cert, _ := encrypt.StringDecrypt(certItem.Value)
+			keyItem, err := settingRepo.Get(settingRepo.WithByKey("ServerKey"))
+			if err != nil {
+				panic(err)
+			}
+			key, _ := encrypt.StringDecrypt(keyItem.Value)
+			tlsCert, err := tls.X509KeyPair([]byte(cert), []byte(key))
+			if err != nil {
+				fmt.Printf("failed to load X.509 key pair: %s\n", err)
+				return
+			}
 
-		server.TLSConfig = &tls.Config{
-			Certificates: []tls.Certificate{tlsCert},
-			ClientAuth:   tls.RequireAndVerifyClientCert,
-		}
-		caItem, _ := settingRepo.GetValueByKey("RootCrt")
-		if len(caItem) != 0 {
-			caCertPool := x509.NewCertPool()
-			rootCrt, _ := encrypt.StringDecrypt(caItem)
-			caCertPool.AppendCertsFromPEM([]byte(rootCrt))
-			server.TLSConfig.ClientCAs = caCertPool
+			server.TLSConfig = &tls.Config{
+				Certificates: []tls.Certificate{tlsCert},
+				ClientAuth:   tls.RequireAndVerifyClientCert,
+			}
+			caItem, _ := settingRepo.GetValueByKey("RootCrt")
+			if len(caItem) != 0 {
+				caCertPool := x509.NewCertPool()
+				rootCrt, _ := encrypt.StringDecrypt(caItem)
+				caCertPool.AppendCertsFromPEM([]byte(rootCrt))
+				server.TLSConfig.ClientCAs = caCertPool
+			}
 		}
 		business.Init()
 		global.LOG.Info("agent startup: business initialized")
@@ -193,4 +197,30 @@ func Start() {
 			panic(err)
 		}
 	}
+}
+
+// loadNodeFileTLS reads the server certificate and the master's CA that the node install
+// script placed under /etc/1panel/node; nodes installed that way carry no TLS data in the agent database.
+func loadNodeFileTLS() (*tls.Config, bool) {
+	dir := "/etc/1panel/node"
+	crt, err1 := os.ReadFile(dir + "/server.crt")
+	key, err2 := os.ReadFile(dir + "/server.key")
+	ca, err3 := os.ReadFile(dir + "/ca.crt")
+	if err1 != nil || err2 != nil || err3 != nil {
+		return nil, false
+	}
+	pair, err := tls.X509KeyPair(crt, key)
+	if err != nil {
+		return nil, false
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(ca) {
+		return nil, false
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{pair},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    pool,
+		MinVersion:   tls.VersionTLS12,
+	}, true
 }

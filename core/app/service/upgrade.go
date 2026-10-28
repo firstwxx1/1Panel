@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -88,7 +89,13 @@ func NewIUpgradeService() IUpgradeService {
 	return &UpgradeService{}
 }
 
+// errUpgradeDisabled: this build carries self-written features; the official upgrade would replace it with the community edition.
+var errUpgradeDisabled = errors.New("in-panel upgrade is disabled in this build, use install-pro.sh instead")
+
 func (u *UpgradeService) SearchUpgrade() (*dto.UpgradeInfo, error) {
+	if true {
+		return &dto.UpgradeInfo{}, nil
+	}
 	if global.CONF.Base.IsOffline {
 		return &dto.UpgradeInfo{}, nil
 	}
@@ -132,6 +139,9 @@ func (u *UpgradeService) SearchUpgrade() (*dto.UpgradeInfo, error) {
 }
 
 func (u *UpgradeService) LoadNotes(req dto.Upgrade) (string, error) {
+	if true {
+		return "", errUpgradeDisabled
+	}
 	mode := global.CONF.Base.Mode
 	if strings.Contains(req.Version, "beta") {
 		mode = "beta"
@@ -144,6 +154,9 @@ func (u *UpgradeService) LoadNotes(req dto.Upgrade) (string, error) {
 }
 
 func (u *UpgradeService) Upgrade(req dto.Upgrade) error {
+	if true {
+		return errUpgradeDisabled
+	}
 	global.LOG.Info("start to upgrade now...")
 	itemArch, err := loadArch()
 	if err != nil {
@@ -276,6 +289,9 @@ func (u *UpgradeService) Upgrade(req dto.Upgrade) error {
 }
 
 func (u *UpgradeService) Rollback(req dto.OperateByID) error {
+	if true {
+		return errUpgradeDisabled
+	}
 	log, _ := upgradeLogRepo.Get(repo.WithByID(req.ID))
 	if log.ID == 0 {
 		return buserr.New("ErrRecordNotFound")
@@ -298,6 +314,9 @@ type noteDetailHelper struct {
 }
 
 func (u *UpgradeService) LoadRelease() ([]dto.ReleasesNotes, error) {
+	if true {
+		return nil, errUpgradeDisabled
+	}
 	docSource, _ := settingRepo.GetValueByKey("DocSource")
 	lang, _ := settingRepo.GetValueByKey("Language")
 	var notes []dto.ReleasesNotes

@@ -27,7 +27,7 @@ func PasswordExpired() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if IsPublicFileShareAPI(c.Request.URL.Path) {
+		if IsPublicFileShareAPI(c.Request.URL.Path) || strings.HasPrefix(c.Request.URL.Path, "/api/v2/core/nodejoin/") {
 			c.Next()
 			return
 		}

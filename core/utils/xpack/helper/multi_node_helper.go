@@ -1,3 +1,5 @@
+//go:build !xpack && !enterprise
+
 package helper
 
 import (
