@@ -41,7 +41,7 @@
                             <template v-else>-</template>
                         </div>
                         <div class="links" @click.stop>
-                            <el-link type="primary" :underline="false" :disabled="n.status !== 'Healthy'" @click="go(n, '/hosts/terminal')">
+                            <el-link type="primary" :underline="false" :disabled="n.status !== 'Healthy'" @click="go(n, '/terminal')">
                                 {{ $t('pro.node.terminal') }}
                             </el-link>
                             <el-link type="primary" :underline="false" :disabled="n.status !== 'Healthy'" @click="go(n, '/logs')">
