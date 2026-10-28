@@ -4,6 +4,7 @@ import '@/xpack/lang/node';
 import '@/xpack/lang/monitor';
 import '@/xpack/lang/sync';
 import '@/xpack/lang/alert';
+import '@/xpack/lang/tamper';
 
 const xpackRouter = {
     sort: 3.5,
@@ -41,6 +42,15 @@ const xpackRouter = {
             meta: {
                 icon: 'p-exchange-menu',
                 title: 'pro.sync.title',
+            },
+        },
+        {
+            path: '/xpack/tamper',
+            name: 'ProTamper',
+            component: () => import('@/xpack/views/tamper/index.vue'),
+            meta: {
+                icon: 'p-waf-1',
+                title: 'pro.tamper.title',
             },
         },
         {

@@ -109,7 +109,7 @@ const testing = ref(false);
 const fetching = ref(false);
 
 const groups = [
-    { key: 'site', rules: ['cert_expire', 'site_5xx'] },
+    { key: 'site', rules: ['cert_expire', 'site_5xx', 'site_tamper'] },
     { key: 'waf', rules: ['waf_attack'] },
     { key: 'task', rules: ['cron_failed', 'app_error', 'node_offline', 'sync_failed'] },
 ];

@@ -1,0 +1,50 @@
+import i18n from '@/lang';
+
+const messages = {
+    zh: {
+        title: '网站防篡改',
+        sites: '站点保护',
+        events: '篡改记录',
+        globalSwitch: '启用防篡改',
+        interval: '扫描间隔（秒）',
+        saveGlobal: '保存',
+        saved: '已保存',
+        desc: '为网站目录建立文件指纹基线，定期扫描；发现文件被修改、新增或删除时记录并告警，可选自动恢复。网站正常更新后，请点「重建基线」。',
+        site: '网站',
+        root: '目录',
+        protect: '保护',
+        restore: '自动恢复',
+        restoreTip: '开启后：被改动或删除的文件自动还原，新增的文件移入隔离区',
+        files: '文件数',
+        baselineAt: '基线时间',
+        pending: '未处理',
+        operation: '操作',
+        excludes: '排除规则',
+        excludesTip: '每行一条，如 runtime、cache/*、*.log；匹配的目录或文件不参与检查',
+        rebuild: '重建基线',
+        rebuildConfirm: '将以网站当前内容作为新的可信基线，确认吗？',
+        rebuilt: '基线已重建，共 {n} 个文件',
+        scan: '立即扫描',
+        scanResult: '扫描完成，发现 {n} 处变化',
+        time: '时间',
+        kind: '类型',
+        path: '文件',
+        action: '处理',
+        all: '全部网站',
+        clear: '清空记录',
+        refresh: '刷新',
+        k_modified: '被修改',
+        k_added: '新增文件',
+        k_deleted: '被删除',
+        a_none: '仅记录',
+        a_restored: '已恢复',
+        a_quarantined: '已隔离',
+        a_restore_failed: '恢复失败',
+        noBaseline: '未建立',
+        save: '保存',
+    },
+};
+
+for (const [locale, msg] of Object.entries(messages)) {
+    i18n.global.mergeLocaleMessage(locale, { pro: { tamper: msg } });
+}

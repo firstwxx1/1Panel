@@ -31,6 +31,7 @@ const messages = {
         r_app_error: '应用/容器异常',
         r_node_offline: '节点离线',
         r_sync_failed: '资源同步失败',
+        r_site_tamper: '网站被篡改',
         u_cert_expire: '剩余天数 ≤',
         u_site_5xx: '每周期 5xx ≥',
         u_waf_attack: '每周期拦截 ≥',

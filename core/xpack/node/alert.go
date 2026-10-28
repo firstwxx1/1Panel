@@ -55,6 +55,7 @@ var alertDefaults = map[string]AlertRule{
 	"app_error":    {true, 0},
 	"node_offline": {true, 0},
 	"sync_failed":  {true, 0},
+	"site_tamper":  {true, 0},
 }
 
 var (
@@ -394,6 +395,32 @@ func alertNode(node string, since time.Time) {
 					fire("site_5xx", node, "5xx|"+node+"|"+s.Alias, fmt.Sprintf("网站 %s 最近一个周期出现 %d 个 5xx 错误", s.Alias, d), false)
 				}
 			}
+		}
+	}
+	if r := ruleOf("site_tamper"); r.Enabled {
+		key := "tamper|" + node
+		alertMu.Lock()
+		last, known := alertPrev[key]
+		alertMu.Unlock()
+		var res struct {
+			Items []struct {
+				Site, Kind, Path, Action string
+				ID                       int64
+			} `json:"items"`
+			Last int64 `json:"last"`
+		}
+		if agentJSON(node, http.MethodGet, fmt.Sprintf("/xpack/tamper/events/since?id=%d", last), nil, &res) == nil {
+			if known { // the first poll only sets the watermark, so old events are not replayed
+				kinds := map[string]string{"modified": "被修改", "added": "新增文件", "deleted": "被删除"}
+				acts := map[string]string{"restored": "，已自动恢复", "quarantined": "，已隔离", "restore_failed": "，恢复失败"}
+				for _, e := range res.Items {
+					fire("site_tamper", node, fmt.Sprintf("tamper|%s|%d", node, e.ID),
+						fmt.Sprintf("网站 %s 检测到篡改：%s %s%s", e.Site, e.Path, kinds[e.Kind], acts[e.Action]), true)
+				}
+			}
+			alertMu.Lock()
+			alertPrev[key] = res.Last
+			alertMu.Unlock()
 		}
 	}
 	if r := ruleOf("waf_attack"); r.Enabled {

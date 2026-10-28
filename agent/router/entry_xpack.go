@@ -3,7 +3,7 @@
 package router
 
 func RouterGroups() []CommonRouter {
-	return append(commonGroups(), &WafRouter{}, &NodeRouter{}, &MonitorRouter{})
+	return append(commonGroups(), &WafRouter{}, &NodeRouter{}, &MonitorRouter{}, &TamperRouter{})
 }
 
 var RouterGroupApp = RouterGroups()
