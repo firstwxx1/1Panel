@@ -72,8 +72,9 @@ func fail(c *gin.Context, code int, msg string) {
 func (p *Provider) Proxy(c *gin.Context, currentNode string) {
 	p.StartBackground()
 	path := c.Request.URL.Path
-	// node management itself is served by the master
-	if strings.HasPrefix(path, "/api/v2/core/xpack/nodes") || strings.HasPrefix(path, "/api/v2/core/xpack/panels") {
+	// node management and resource sync are served by the master
+	if strings.HasPrefix(path, "/api/v2/core/xpack/nodes") || strings.HasPrefix(path, "/api/v2/core/xpack/panels") ||
+		strings.HasPrefix(path, "/api/v2/core/xpack/sync/") {
 		c.Next()
 		return
 	}

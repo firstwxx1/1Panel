@@ -2,6 +2,7 @@ import { Layout } from '@/routers/constant';
 import '@/xpack/lang';
 import '@/xpack/lang/node';
 import '@/xpack/lang/monitor';
+import '@/xpack/lang/sync';
 
 const xpackRouter = {
     sort: 3.5,
@@ -30,6 +31,15 @@ const xpackRouter = {
             meta: {
                 icon: 'p-monitor-menu',
                 title: 'pro.monitor.title',
+            },
+        },
+        {
+            path: '/xpack/sync',
+            name: 'ProSync',
+            component: () => import('@/xpack/views/sync/index.vue'),
+            meta: {
+                icon: 'p-exchange-menu',
+                title: 'pro.sync.title',
             },
         },
         {

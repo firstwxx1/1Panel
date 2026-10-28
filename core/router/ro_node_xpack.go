@@ -173,6 +173,42 @@ func (r *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 		cmd := fmt.Sprintf(`curl -fsSLk "%s/api/v2/core/nodejoin/script?token=%s" | bash`, masterURL(c), strings.TrimSpace(req.Token))
 		helper.SuccessWithData(c, cmd)
 	})
+	// resource sync: the master streams data between two nodes' agents
+	x.POST("sync/files", func(c *gin.Context) {
+		var req node.SyncFileReq
+		if !nodeBind(c, &req) {
+			return
+		}
+		t, err := node.SyncFiles(req)
+		nodeDone(c, t, err)
+	})
+	x.POST("sync/images", func(c *gin.Context) {
+		var req node.SyncImageReq
+		if !nodeBind(c, &req) {
+			return
+		}
+		t, err := node.SyncImages(req)
+		nodeDone(c, t, err)
+	})
+	x.POST("sync/certs", func(c *gin.Context) {
+		var req node.SyncCertReq
+		if !nodeBind(c, &req) {
+			return
+		}
+		t, err := node.SyncCerts(req)
+		nodeDone(c, t, err)
+	})
+	x.GET("sync/tasks", func(c *gin.Context) { helper.SuccessWithData(c, node.SyncTasks()) })
+	x.POST("sync/tasks/del", func(c *gin.Context) {
+		var req struct {
+			IDs []string `json:"ids"`
+		}
+		if !nodeBind(c, &req) {
+			return
+		}
+		node.DeleteSyncTasks(req.IDs)
+		helper.Success(c)
+	})
 	// apps awaiting upgrade, used by the node switcher; none tracked yet
 	x.GET("nodes/apps/update", func(c *gin.Context) { helper.SuccessWithData(c, []interface{}{}) })
 }
