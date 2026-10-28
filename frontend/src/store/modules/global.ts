@@ -102,6 +102,8 @@ const GlobalStore = defineStore('GlobalState', {
         isXpackOrEE: (state) => {
             return (state.isEnterprise && state.isEnterpriseLicensed) || state.isMasterProductPro;
         },
+        // interface customisation (theme colour, logo, watermark) works without a licence in this build
+        isUiCustom: () => true,
         isEE: (state) => state.isEnterprise && state.isEnterpriseLicensed,
         isMasterPro: (state) => state.isMasterProductPro,
     },

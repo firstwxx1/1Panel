@@ -12,6 +12,7 @@ type GlobalGetterKey =
     | 'isMaster'
     | 'isMobile'
     | 'isXpackOrEE'
+    | 'isUiCustom'
     | 'isEE'
     | 'isMasterPro';
 

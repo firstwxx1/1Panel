@@ -38,6 +38,7 @@ import { ref, onMounted } from 'vue';
 import { useGlobalStore } from '@/composables/useGlobalStore';
 import { preloadImage } from '@/utils/browser';
 import { hasExternalLoginTicket } from '@/utils/external-login';
+import { getXpackSettingForTheme } from '@/utils/xpack';
 defineOptions({ name: 'Login' });
 const { entrance, isEnterprise, themeConfig } = useGlobalStore();
 const backgroundOpacity = ref(1);
@@ -105,6 +106,7 @@ const onImgError = (event: any) => {
 
 onMounted(async () => {
     await getStatus();
+    await getXpackSettingForTheme().catch(() => {});
     const loginImageUrl = `/api/v2/images/loginImage?t=${Date.now()}`;
     const backgroundImageUrl = `/api/v2/images/loginBackground?t=${Date.now()}`;
     if (themeConfig.value.loginImage === 'loginImage') {

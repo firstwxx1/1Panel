@@ -206,6 +206,33 @@ func (r *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 		t, err := node.SyncApp(req)
 		nodeDone(c, t, err)
 	})
+	// interface settings; search is public because the login page needs it
+	Router.GET("xpack/settings/search", func(c *gin.Context) { helper.SuccessWithData(c, node.UIGetSettings()) })
+	x.POST("settings/update", func(c *gin.Context) {
+		var req struct {
+			Key   string `json:"key"`
+			Value string `json:"value"`
+		}
+		if !nodeBind(c, &req) {
+			return
+		}
+		nodeDone(c, nil, node.UISetSetting(req.Key, req.Value))
+	})
+	x.POST("settings/upload", func(c *gin.Context) {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 5<<20)
+		fh, err := c.FormFile("file")
+		if err != nil {
+			helper.BadRequest(c, err)
+			return
+		}
+		f, err := fh.Open()
+		if err != nil {
+			helper.BadRequest(c, err)
+			return
+		}
+		defer f.Close()
+		nodeDone(c, nil, node.UIUpload(c.PostForm("kind"), f))
+	})
 	x.GET("alert/config", func(c *gin.Context) { helper.SuccessWithData(c, node.GetAlertConfig()) })
 	x.POST("alert/config", func(c *gin.Context) {
 		var req node.AlertConfig

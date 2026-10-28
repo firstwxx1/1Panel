@@ -36,7 +36,7 @@
                                     </div>
                                     <div>
                                         <el-button
-                                            v-if="isXpackOrEE"
+                                            v-if="isUiCustom"
                                             @click="onChangeThemeColor"
                                             icon="Setting"
                                             class="!h-[32px] sm:!h-[33.5px]"
@@ -59,7 +59,7 @@
                                 <span class="input-help">{{ $t('setting.menuTabsHelper') }}</span>
                             </el-form-item>
 
-                            <el-form-item :label="$t('setting.watermark')" v-if="isXpackOrEE" prop="watermark">
+                            <el-form-item :label="$t('setting.watermark')" v-if="isUiCustom" prop="watermark">
                                 <el-radio-group class="w-full" @change="onChangeWatermark" v-model="form.watermarkShow">
                                     <el-radio-button value="Enable">
                                         <span>{{ $t('commons.button.enable') }}</span>
@@ -228,7 +228,7 @@ const {
     isEnterprise,
     isIntl,
     isMobile,
-    isXpackOrEE,
+    isUiCustom,
     menuAccordion,
     openMenuTabs,
     themeConfig,
@@ -337,7 +337,7 @@ const search = async () => {
     form.developerMode = res.data.developerMode;
     form.hideMenu = res.data.hideMenu;
 
-    if (isXpackOrEE.value) {
+    if (isUiCustom.value) {
         const [xpackRes, proxyDockerRes] = await Promise.all([
             getXpackSetting(),
             getXpackProxyDocker().catch(() => null),
@@ -438,7 +438,7 @@ const handleThemeChange = async (val: string) => {
     localStorage.removeItem(codeEditorThemeStorageKey);
     themeConfig.value.theme = val;
     switchTheme();
-    if (isXpackOrEE.value) {
+    if (isUiCustom.value) {
         await updateXpackSettingByKey('Theme', val);
         let color: string;
         const themeColor: ThemeColor = JSON.parse(themeConfig.value.themeColor);

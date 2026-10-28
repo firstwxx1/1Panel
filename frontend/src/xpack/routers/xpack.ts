@@ -5,6 +5,7 @@ import '@/xpack/lang/monitor';
 import '@/xpack/lang/sync';
 import '@/xpack/lang/alert';
 import '@/xpack/lang/tamper';
+import '@/xpack/lang/uisetting';
 
 const xpackRouter = {
     sort: 3.5,
@@ -60,6 +61,15 @@ const xpackRouter = {
             meta: {
                 icon: 'p-monitor-menu',
                 title: 'pro.alert.title',
+            },
+        },
+        {
+            path: '/xpack/uisetting',
+            name: 'ProUiSetting',
+            component: () => import('@/xpack/views/uisetting/index.vue'),
+            meta: {
+                icon: 'p-xpack',
+                title: 'pro.uisetting.title',
             },
         },
         {

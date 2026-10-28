@@ -44,7 +44,7 @@ export async function initFavicon() {
     const globalStore = GlobalStore();
     document.title = globalStore.themeConfig.panelName;
     const favicon = globalStore.themeConfig.favicon;
-    const isPro = globalStore.isXpackOrEE;
+    const isPro = globalStore.isUiCustom;
     const themeColor = globalStore.themeConfig.primary;
     const customFaviconUrl = `/api/v2/images/favicon?t=${Date.now()}`;
     const fallbackSvg = isPro ? await getColoredFavicon(faviconUrl, themeColor) : '/public/favicon.png';

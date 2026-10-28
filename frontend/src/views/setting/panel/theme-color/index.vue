@@ -76,7 +76,7 @@ import { FormInstance } from 'element-plus';
 import { initFavicon, updateXpackSettingByKey } from '@/utils/xpack';
 import { setPrimaryColor } from '@/utils/theme';
 import { useGlobalStore } from '@/composables/useGlobalStore';
-const { isXpackOrEE, themeConfig } = useGlobalStore();
+const { isUiCustom, themeConfig } = useGlobalStore();
 const emit = defineEmits<(e: 'search') => void>();
 const drawerVisible = ref();
 const loading = ref();
@@ -247,7 +247,7 @@ const onSave = async (formEl: FormInstance | undefined) => {
         await formEl.validate(async (valid) => {
             if (!valid) return;
             form.themeColor = { light: form.light, dark: form.dark, themePredefineColors: themeColors.value };
-            if (isXpackOrEE.value) {
+            if (isUiCustom.value) {
                 await updateXpackSettingByKey('ThemeColor', JSON.stringify(form.themeColor));
                 MsgSuccess(i18n.global.t('commons.msg.operationSuccess'));
                 themeConfig.value.themeColor = JSON.stringify(form.themeColor);
@@ -275,7 +275,7 @@ const onReSet = async () => {
         type: 'info',
     }).then(async () => {
         form.themeColor = { light: '#005eeb', dark: '#F0BE96', themePredefineColors: themeColors.value };
-        if (isXpackOrEE.value) {
+        if (isUiCustom.value) {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(defaultColors));
             themeColors.value = { ...defaultColors };
             darkColors = [...defaultDarkColors];

@@ -24,7 +24,7 @@
         </div>
 
         <el-watermark
-            v-if="isXpackOrEE && watermarkShow && watermark"
+            v-if="isUiCustom && watermarkShow && watermark"
             :content="loadContent()"
             :font="{
                 fontSize: watermark.fontSize,
@@ -63,7 +63,7 @@ import useResize from './hooks/useResize';
 import { MenuStore, TabsStore } from '@/store';
 import { getSystemAvailable } from '@/api/modules/setting';
 import { useRoute, useRouter } from 'vue-router';
-import { loadMasterProductProFromDB, loadProductProFromDB } from '@/utils/xpack';
+import { getXpackSettingForTheme, loadMasterProductProFromDB, loadProductProFromDB } from '@/utils/xpack';
 import { useTheme } from '@/global/use-theme';
 import TaskList from '@/components/task-list/index.vue';
 import i18n from '@/lang';
@@ -79,6 +79,7 @@ const {
     isLoading,
     isMobile,
     isXpackOrEE,
+    isUiCustom,
     loadingText: globalLoadingText,
     openMenuTabs,
     watermark,
@@ -201,6 +202,7 @@ onMounted(() => {
     loadStatus();
     loadProductProFromDB();
     loadMasterProductProFromDB();
+    getXpackSettingForTheme().catch(() => {});
     isFullScreen.value = false;
 
     const mqList = window.matchMedia('(prefers-color-scheme: dark)');

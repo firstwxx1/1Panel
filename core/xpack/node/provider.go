@@ -74,7 +74,9 @@ func (p *Provider) Proxy(c *gin.Context, currentNode string) {
 	path := c.Request.URL.Path
 	// node management and resource sync are served by the master
 	if strings.HasPrefix(path, "/api/v2/core/xpack/nodes") || strings.HasPrefix(path, "/api/v2/core/xpack/panels") ||
-		strings.HasPrefix(path, "/api/v2/core/xpack/sync/") || strings.HasPrefix(path, "/api/v2/core/xpack/alert/") {
+		strings.HasPrefix(path, "/api/v2/core/xpack/sync/") || strings.HasPrefix(path, "/api/v2/core/xpack/alert/") ||
+		strings.HasPrefix(path, "/api/v2/core/xpack/settings/search") || strings.HasPrefix(path, "/api/v2/core/xpack/settings/update") ||
+		strings.HasPrefix(path, "/api/v2/core/xpack/settings/upload") {
 		c.Next()
 		return
 	}
