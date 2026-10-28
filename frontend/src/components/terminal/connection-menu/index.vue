@@ -101,7 +101,9 @@ const props = defineProps<{
     openSession: (options: TerminalConnectionOptions) => Promise<void>;
 }>();
 const visible = defineModel<boolean>({ default: false });
-const { isNodeAdmin, isXpackOrEE, currentNode, globalStore } = useGlobalStore();
+const { isNodeAdmin, currentNode, globalStore } = useGlobalStore();
+// this build ships the multi-node module itself, so the node list never depends on a license check
+const isXpackOrEE = ref(true);
 const hostDialogRef = ref<InstanceType<typeof HostDialog>>();
 const onNewSsh = () => {
     if (isNodeAdmin.value || connecting.value) return;

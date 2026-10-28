@@ -39,13 +39,35 @@ func EnsureLocalSSH() {
 		if show, _ := settingRepo.GetValueByKey("LocalSSHConnShow"); show == constant.StatusDisable {
 			return
 		}
-		if conn, _ := settingRepo.GetValueByKey("LocalSSHConn"); conn != "" {
+		if conn, _ := settingRepo.GetValueByKey("LocalSSHConn"); conn != "" && localConnWorks(conn) {
 			return
 		}
 		if err := setupLocalSSH(); err != nil {
 			global.LOG.Warnf("auto local ssh: %v", err)
 		}
 	})
+}
+
+// localConnWorks reports whether the stored connection still logs in; a stale one is replaced.
+func localConnWorks(enc string) bool {
+	plain, err := encrypt.StringDecrypt(enc)
+	if err != nil {
+		return false
+	}
+	var item model.LocalConnInfo
+	if json.Unmarshal([]byte(plain), &item) != nil {
+		return false
+	}
+	info := ssh.ConnInfo{User: item.User, Addr: item.Addr, Port: int(item.Port), AuthMode: item.AuthMode, Password: item.Password, PrivateKey: []byte(item.PrivateKey)}
+	if item.PassPhrase != "" {
+		info.PassPhrase = []byte(item.PassPhrase)
+	}
+	c, err := ssh.NewClient(info)
+	if err != nil {
+		return false
+	}
+	c.Close()
+	return true
 }
 
 func localSSHPort() int {
