@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/1Panel-dev/1Panel/agent/app/api/v2/helper"
+	"github.com/1Panel-dev/1Panel/agent/app/service"
 	"github.com/1Panel-dev/1Panel/agent/global"
 	"github.com/1Panel-dev/1Panel/agent/xpack/appsync"
 	"github.com/gin-gonic/gin"
@@ -22,6 +23,7 @@ func (a *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 		helper.SuccessWithData(c, map[string]interface{}{"master": global.IsMaster, "version": global.CONF.Base.Version})
 	})
 	appsync.Register(g)
+	go service.EnsureLocalSSH()
 	g.POST("/restart", func(c *gin.Context) {
 		helper.Success(c)
 		go func() {
