@@ -3,6 +3,7 @@ import '@/xpack/lang';
 import '@/xpack/lang/node';
 import '@/xpack/lang/monitor';
 import '@/xpack/lang/sync';
+import '@/xpack/lang/alert';
 
 const xpackRouter = {
     sort: 3.5,
@@ -40,6 +41,15 @@ const xpackRouter = {
             meta: {
                 icon: 'p-exchange-menu',
                 title: 'pro.sync.title',
+            },
+        },
+        {
+            path: '/xpack/alert',
+            name: 'ProAlert',
+            component: () => import('@/xpack/views/alert/index.vue'),
+            meta: {
+                icon: 'p-monitor-menu',
+                title: 'pro.alert.title',
             },
         },
         {

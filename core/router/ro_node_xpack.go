@@ -206,6 +206,34 @@ func (r *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 		t, err := node.SyncApp(req)
 		nodeDone(c, t, err)
 	})
+	x.GET("alert/config", func(c *gin.Context) { helper.SuccessWithData(c, node.GetAlertConfig()) })
+	x.POST("alert/config", func(c *gin.Context) {
+		var req node.AlertConfig
+		if !nodeBind(c, &req) {
+			return
+		}
+		nodeDone(c, nil, node.SaveAlertConfig(req))
+	})
+	x.POST("alert/telegram/test", func(c *gin.Context) {
+		var req node.AlertTelegram
+		if !nodeBind(c, &req) {
+			return
+		}
+		nodeDone(c, nil, node.TestTelegram(req))
+	})
+	x.POST("alert/telegram/chats", func(c *gin.Context) {
+		var req node.AlertTelegram
+		if !nodeBind(c, &req) {
+			return
+		}
+		res, err := node.DiscoverChatIDs(req)
+		nodeDone(c, res, err)
+	})
+	x.GET("alert/records", func(c *gin.Context) { helper.SuccessWithData(c, node.AlertRecords()) })
+	x.POST("alert/records/clear", func(c *gin.Context) {
+		node.ClearAlertRecords()
+		helper.Success(c)
+	})
 	x.GET("sync/tasks", func(c *gin.Context) { helper.SuccessWithData(c, node.SyncTasks()) })
 	x.POST("sync/tasks/del", func(c *gin.Context) {
 		var req struct {
