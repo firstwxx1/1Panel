@@ -610,3 +610,100 @@ func SyncCerts(req SyncCertReq) (*SyncTask, error) {
 	}()
 	return t, nil
 }
+
+// ---- app transfer
+
+type SyncAppReq struct {
+	Src  string   `json:"src"`
+	Dsts []string `json:"dsts"`
+	Name string   `json:"name"`
+	Stop bool     `json:"stop"` // stop the source app while its files are copied
+}
+
+type appMeta struct {
+	Install json.RawMessage `json:"install"`
+	AppKey  string          `json:"appKey"`
+	Dir     string          `json:"dir"`
+	Images  []string        `json:"images"`
+}
+
+func SyncApp(req SyncAppReq) (*SyncTask, error) {
+	if req.Name == "" || len(req.Dsts) == 0 {
+		return nil, fmt.Errorf("select an app and at least one target node")
+	}
+	dsts := make([]string, 0, len(req.Dsts))
+	for _, d := range req.Dsts {
+		if d != req.Src {
+			dsts = append(dsts, d)
+		}
+	}
+	if len(dsts) == 0 {
+		return nil, fmt.Errorf("source node cannot be a target")
+	}
+	t := newTask("app", req.Name, req.Src, dsts)
+	go func() {
+		var firstErr error
+		for i, d := range dsts {
+			if err := syncOneApp(t, req, d); err != nil {
+				t.logf("%s -> %s failed: %v", req.Name, d, err)
+				if firstErr == nil {
+					firstErr = err
+				}
+			} else {
+				t.logf("%s -> %s ok", req.Name, d)
+			}
+			t.progress((i + 1) * 100 / len(dsts))
+		}
+		t.finish(firstErr)
+	}()
+	return t, nil
+}
+
+func syncOneApp(t *SyncTask, req SyncAppReq, dst string) error {
+	var m appMeta
+	if err := agentJSON(req.Src, http.MethodGet, "/xpack/node/app/meta?name="+url.QueryEscape(req.Name), nil, &m); err != nil {
+		return err
+	}
+	// refuse early when the target already has an app of this name
+	if agentJSON(dst, http.MethodGet, "/xpack/node/app/meta?name="+url.QueryEscape(req.Name), nil, nil) == nil {
+		return fmt.Errorf("an app named %s already exists on %s", req.Name, dst)
+	}
+	var parent string
+	if err := agentJSON(dst, http.MethodGet, "/xpack/node/app/dir?key="+url.QueryEscape(m.AppKey), nil, &parent); err != nil {
+		return err
+	}
+	var inst struct {
+		Status string `json:"status"`
+	}
+	_ = json.Unmarshal(m.Install, &inst)
+	wasRunning := inst.Status == "Running"
+
+	for _, img := range m.Images {
+		if hasImage(dst, img) {
+			continue
+		}
+		t.logf("image %s", img)
+		if err := syncOneImage(t, req.Src, []string{dst}, img, func() {}); err != nil {
+			return err
+		}
+	}
+	if req.Stop && wasRunning {
+		t.logf("stop %s on %s", req.Name, req.Src)
+		if err := agentJSON(req.Src, http.MethodPost, "/xpack/node/app/compose", map[string]string{"name": req.Name, "op": "stop"}, nil); err != nil {
+			return err
+		}
+		defer func() {
+			t.logf("start %s on %s", req.Name, req.Src)
+			_ = agentJSON(req.Src, http.MethodPost, "/xpack/node/app/compose", map[string]string{"name": req.Name, "op": "start"}, nil)
+		}()
+	}
+	t.logf("copy app files %s -> %s:%s", m.Dir, dst, parent)
+	fr := SyncFileReq{Src: req.Src, Dst: dst, DstDir: parent}
+	if err := syncOneFile(t, fr, SyncFileItem{Path: m.Dir, IsDir: true}, func(int) {}); err != nil {
+		return err
+	}
+	t.logf("register on %s", dst)
+	return agentJSON(dst, http.MethodPost, "/xpack/node/app/import", map[string]interface{}{
+		"install": m.Install, "appKey": m.AppKey, "start": wasRunning,
+	}, nil)
+}

@@ -2,8 +2,8 @@
     <div>
         <el-card shadow="never" class="mb-3">
             <div class="head">
-                <div class="title">{{ $t('pro.sync.' + (kind === 'image' ? 'imageTitle' : 'certTitle')) }}</div>
-                <div class="desc">{{ $t('pro.sync.' + (kind === 'image' ? 'imageDesc' : 'certDesc')) }}</div>
+                <div class="title">{{ $t('pro.sync.' + kind + 'Title') }}</div>
+                <div class="desc">{{ $t('pro.sync.' + kind + 'Desc') }}</div>
             </div>
             <div class="bar">
                 <el-select v-model="src" style="width: 180px" @change="onSrc">
@@ -12,7 +12,7 @@
                 <el-input v-model="keyword" clearable style="width: 240px" :placeholder="$t('pro.sync.search')" />
                 <el-button :icon="Refresh" @click="load" />
             </div>
-            <el-table :data="pageRows" v-loading="loading" @selection-change="(v: any[]) => (selected = v)">
+            <el-table ref="tableRef" :data="pageRows" v-loading="loading" @select="onSelect" @selection-change="(v: any[]) => (selected = v)">
                 <el-table-column type="selection" width="40" />
                 <template v-if="kind === 'image'">
                     <el-table-column prop="id" label="ID" min-width="140" show-overflow-tooltip />
@@ -24,6 +24,12 @@
                     <el-table-column :label="$t('pro.sync.size')" width="120">
                         <template #default="{ row }">{{ fmtSize(row.size) }}</template>
                     </el-table-column>
+                </template>
+                <template v-else-if="kind === 'app'">
+                    <el-table-column prop="name" :label="$t('pro.sync.name')" min-width="160" />
+                    <el-table-column prop="appKey" :label="$t('pro.sync.appName')" min-width="140" />
+                    <el-table-column prop="version" :label="$t('pro.sync.version')" width="140" />
+                    <el-table-column prop="status" :label="$t('pro.sync.status')" width="120" />
                 </template>
                 <template v-else>
                     <el-table-column prop="primaryDomain" :label="$t('pro.sync.domain')" min-width="200" />
@@ -49,6 +55,7 @@
             <el-checkbox-group v-else v-model="dsts">
                 <el-checkbox v-for="n in targets" :key="n.name" :value="n.name" border>{{ n.name }}</el-checkbox>
             </el-checkbox-group>
+            <el-checkbox v-if="kind === 'app'" v-model="stopSrc" class="mt-2">{{ $t('pro.sync.stopSrc') }}</el-checkbox>
             <div class="foot">
                 <span v-if="!selected.length" class="hint">{{ $t('pro.sync.selectFirst') }}</span>
                 <el-button type="primary" :disabled="!selected.length || !dsts.length" :loading="busy" @click="run">
@@ -64,10 +71,10 @@ import { computed, onMounted, ref } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { listAllNodes, nodeQuery, NodeRow } from '@/xpack/api/node';
-import { syncCerts, syncImages } from '@/xpack/api/sync';
+import { syncApps, syncCerts, syncImages } from '@/xpack/api/sync';
 import i18n from '@/lang';
 
-const props = defineProps<{ kind: 'image' | 'cert' }>();
+const props = defineProps<{ kind: 'image' | 'cert' | 'app' }>();
 const emit = defineEmits<{ (e: 'created'): void }>();
 const t = i18n.global.t;
 
@@ -77,6 +84,8 @@ const keyword = ref('');
 const rows = ref<any[]>([]);
 const selected = ref<any[]>([]);
 const dsts = ref<string[]>([]);
+const stopSrc = ref(true);
+const tableRef = ref();
 const loading = ref(false);
 const busy = ref(false);
 const page = ref(1);
@@ -96,11 +105,19 @@ const filtered = computed(() => {
     return rows.value.filter((r) =>
         props.kind === 'image'
             ? (r.tags || []).join(' ').toLowerCase().includes(k) || String(r.id).includes(k)
-            : String(r.primaryDomain).toLowerCase().includes(k),
+            : props.kind === 'app'
+              ? String(r.name).toLowerCase().includes(k)
+              : String(r.primaryDomain).toLowerCase().includes(k),
     );
 });
 const pageRows = computed(() => filtered.value.slice((page.value - 1) * size.value, page.value * size.value));
 
+// an app is transferred one at a time
+const onSelect = (sel: any[], row: any) => {
+    if (props.kind !== 'app') return;
+    tableRef.value?.clearSelection();
+    if (sel.includes(row)) tableRef.value?.toggleRowSelection(row, true);
+};
 const load = async () => {
     if (!src.value) return;
     loading.value = true;
@@ -114,6 +131,16 @@ const load = async () => {
                 order: 'null',
             });
             rows.value = (res.data?.items || []).filter((i: any) => i.tags?.length);
+        } else if (props.kind === 'app') {
+            const res = await nodeQuery(src.value, '/apps/installed/search', {
+                page: 1,
+                pageSize: 1000,
+                name: '',
+                type: '',
+                update: false,
+                sync: false,
+            });
+            rows.value = (res.data?.items || []).map((i: any) => ({ ...i, appKey: i.appKey || i.app?.key || i.appName }));
         } else {
             const res = await nodeQuery(src.value, '/websites/ssl/search', { page: 1, pageSize: 1000 });
             rows.value = res.data?.items || [];
@@ -139,6 +166,8 @@ const run = async () => {
                 dsts: dsts.value,
                 images: selected.value.map((i) => i.tags[0]),
             });
+        } else if (props.kind === 'app') {
+            await syncApps({ src: src.value, dsts: dsts.value, name: selected.value[0].name, stop: stopSrc.value });
         } else {
             await syncCerts({ src: src.value, dsts: dsts.value, ids: selected.value.map((c) => c.id) });
         }

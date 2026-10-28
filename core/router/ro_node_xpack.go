@@ -198,6 +198,14 @@ func (r *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 		t, err := node.SyncCerts(req)
 		nodeDone(c, t, err)
 	})
+	x.POST("sync/apps", func(c *gin.Context) {
+		var req node.SyncAppReq
+		if !nodeBind(c, &req) {
+			return
+		}
+		t, err := node.SyncApp(req)
+		nodeDone(c, t, err)
+	})
 	x.GET("sync/tasks", func(c *gin.Context) { helper.SuccessWithData(c, node.SyncTasks()) })
 	x.POST("sync/tasks/del", func(c *gin.Context) {
 		var req struct {

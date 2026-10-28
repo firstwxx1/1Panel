@@ -6,10 +6,7 @@
         <Files v-if="active === 'files'" @created="active = 'tasks'" />
         <Resource v-else-if="active === 'images'" kind="image" :key="'i'" @created="active = 'tasks'" />
         <Resource v-else-if="active === 'certs'" kind="cert" :key="'c'" @created="active = 'tasks'" />
-        <el-card v-else-if="active === 'apps'" shadow="never">
-            <div class="title">{{ $t('pro.sync.appsTitle') }}</div>
-            <el-empty :description="$t('pro.sync.appsDesc')" />
-        </el-card>
+        <Resource v-else-if="active === 'apps'" kind="app" :key="'a'" @created="active = 'tasks'" />
         <Tasks v-else-if="active === 'tasks'" />
     </div>
 </template>
