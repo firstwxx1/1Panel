@@ -9,7 +9,7 @@ const messages = {
         telegram: 'Telegram 机器人',
         enable: '启用',
         token: 'Bot Token',
-        tokenHint: '在 Telegram 里找 @BotFather，发送 /newbot 创建机器人后会得到 Token；留空则保持已保存的 Token',
+        tokenHint: "在 Telegram 里找 {'@'}BotFather，发送 /newbot 创建机器人后会得到 Token；留空则保持已保存的 Token",
         chatId: 'Chat ID',
         chatHint: '先给机器人发一条消息（群组需把机器人拉进群并发言），再点「获取 Chat ID」',
         fetchChat: '获取 Chat ID',
