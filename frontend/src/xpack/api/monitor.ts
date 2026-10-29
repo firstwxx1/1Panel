@@ -42,6 +42,17 @@ export interface MonHit {
     ua: string;
     referer: string;
 }
+export interface MonErrItem {
+    status: number;
+    url: string;
+    count: number;
+    last: number;
+}
+export interface MonErrReq extends MonRange {
+    class?: string;
+    page: number;
+    size: number;
+}
 export interface MonSiteItem {
     alias: string;
     domain: string;
@@ -108,6 +119,9 @@ export const monDistribution = (req: MonRange & { dim: string; limit?: number })
     http.post<MonDistItem[]>(`${base}/distribution`, { limit: 10, ...req });
 export const monLogs = (req: MonLogReq) =>
     http.post<{ items: MonHit[]; total: number; stats: MonLogStats; logSize: number }>(`${base}/realtime`, req);
+export const monRealtime = (req: MonLogReq) =>
+    http.post<{ items: MonHit[]; total: number; stats: MonLogStats; logSize: number }>(`${base}/realtime`, req);
+export const monErrors = (req: MonErrReq) => http.post<{ items: MonErrItem[]; total: number }>(`${base}/errors`, req);
 export const monLive = (site: string) =>
     http.post<{ req: number; bytes: number; series: { time: number; req: number; bytes: number }[] }>(`${base}/live`, { site });
 export const monSites = (req: MonRange) => http.post<MonSiteRow[]>(`${base}/sites`, req);
