@@ -36,10 +36,16 @@ func Certificate() gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		// the master always stamps its identity; a request without it over the local unix
+		// socket came from this machine's own core and skips the comparison entirely
 		masterProxyID := c.Request.Header.Get("Proxy-Id")
 		proxyID, err := loadNodeProxyID()
 		if mcpTransport && (err != nil || strings.TrimSpace(proxyID) == "" || strings.TrimSpace(proxyID) != strings.TrimSpace(masterProxyID)) {
 			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+		if masterProxyID == "" && strings.HasSuffix(c.Request.RemoteAddr, ".sock") {
+			c.Next()
 			return
 		}
 		if err == nil && len(proxyID) != 0 && strings.TrimSpace(proxyID) != strings.TrimSpace(masterProxyID) {
