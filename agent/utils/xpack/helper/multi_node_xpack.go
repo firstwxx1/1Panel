@@ -62,7 +62,7 @@ func (m *multiNodeHelper) LoadNodeInfo(isBase bool) (model.NodeInfo, error) {
 		info.Scope = "node"
 		info.BaseDir = cfg.BaseDir
 		if info.BaseDir == "" {
-			info.BaseDir = "/opt/1panel"
+			info.BaseDir = "/opt"
 		}
 		info.NodePort = cfg.Port
 		info.Version = cfg.Version

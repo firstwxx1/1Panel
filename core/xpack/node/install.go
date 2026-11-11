@@ -82,7 +82,7 @@ func bundleScript(n *model.Node, addr string) (string, error) {
 		return "", err
 	}
 	cfg, _ := json.Marshal(map[string]interface{}{
-		"name": n.Name, "addr": addr, "port": n.Port, "baseDir": "/opt/1panel", "version": global.CONF.Base.Version,
+		"name": n.Name, "addr": addr, "port": n.Port, "baseDir": "/opt", "version": global.CONF.Base.Version,
 	})
 	var sb strings.Builder
 	sb.WriteString("set -e\numask 077\nmkdir -p /etc/1panel/node /opt/1panel\n")
