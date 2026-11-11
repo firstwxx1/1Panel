@@ -136,24 +136,34 @@ func Start() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	if global.IsMaster {
-		global.LOG.Infof("agent startup: master mode, preparing unix socket %s", masterSocketPath)
+	// localUnixServer serves the master agent API over agent.sock when a local core sits
+	// on the same machine. It runs for master mode (the only listener) and, alongside the
+	// node https listener, when this machine was enrolled as a child node without giving
+	// up its own 1Panel installation.
+	localUnixServer := func() error {
+		global.LOG.Infof("agent startup: preparing unix socket %s", masterSocketPath)
 		if err := prepareMasterSocketDir(masterSocketDir); err != nil {
-			panic(err)
+			return err
 		}
 		_ = os.Remove(masterSocketPath)
 		listener, err := net.Listen("unix", masterSocketPath)
 		if err != nil {
-			panic(err)
+			return err
 		}
 		if err := secureMasterSocket(masterSocketPath); err != nil {
 			_ = listener.Close()
-			panic(err)
+			return err
 		}
 		global.LOG.Infof("agent startup: listening on unix socket %s", masterSocketPath)
+		local := &http.Server{Handler: rootRouter}
+		return local.Serve(listener)
+	}
+
+	if global.IsMaster {
+		global.LOG.Info("agent startup: master mode")
 		business.Init()
 		global.LOG.Info("agent startup: business initialized")
-		_ = server.Serve(listener)
+		_ = localUnixServer()
 		return
 	} else {
 		server.Addr = fmt.Sprintf("0.0.0.0:%s", global.CONF.Base.Port)
@@ -192,11 +202,34 @@ func Start() {
 		}
 		business.Init()
 		global.LOG.Info("agent startup: business initialized")
+		if localCore, err := coreWantsLocalAgent(); err == nil && localCore {
+			// this node doubles as its own panel: keep the unix socket beside the mTLS listener
+			go func() {
+				if err := localUnixServer(); err != nil {
+					global.LOG.Errorf("local unix socket serving failed: %v", err)
+				}
+			}()
+		}
 		global.LOG.Infof("listen at https://0.0.0.0:%s", global.CONF.Base.Port)
 		if err := server.ListenAndServeTLS("", ""); err != nil {
 			panic(err)
 		}
 	}
+}
+
+// coreWantsLocalAgent reports whether a 1Panel core on this box expects the agent over
+// agent.sock. The core reads its socket path from /usr/local/bin/1pctl alongside its port and
+// version; its presence next to a node.json means the machine was enrolled as a child node but
+// still runs its own panel, so the agent must serve both.
+func coreWantsLocalAgent() (bool, error) {
+	if _, err := os.Stat("/usr/local/bin/1pctl"); err != nil {
+		return false, nil
+	}
+	if _, err := os.Stat("/etc/1panel/node.json"); err != nil {
+		// no node config: plain master install, already handled by the IsMaster branch
+		return false, nil
+	}
+	return true, nil
 }
 
 // loadNodeFileTLS reads the server certificate and the master's CA that the node install

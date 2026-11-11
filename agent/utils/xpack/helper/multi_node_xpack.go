@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/1Panel-dev/1Panel/agent/app/dto"
@@ -95,9 +96,13 @@ func (m *multiNodeHelper) LoadRequestTransport() *http.Transport {
 }
 
 // ValidateCertificate accepts only requests that completed the mutual-TLS handshake
-// against the master's CA; the listener already refuses everything else.
+// against the master's CA; the listener already refuses everything else. Requests arriving
+// over the local unix socket (no TLS at all) come from the machine's own core and pass.
 func (m *multiNodeHelper) ValidateCertificate(c *gin.Context) bool {
-	return c.Request.TLS != nil && len(c.Request.TLS.VerifiedChains) > 0
+	if c.Request.TLS == nil {
+		return strings.HasSuffix(c.Request.RemoteAddr, ".sock") || c.Request.RemoteAddr == "@"
+	}
+	return len(c.Request.TLS.VerifiedChains) > 0
 }
 
 func (m *multiNodeHelper) PushSSLToNode(websiteSSL *model.WebsiteSSL) error { return nil }

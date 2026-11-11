@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -135,6 +136,20 @@ func setStatus(id uint, status, message string) {
 	_ = global.DB.Model(&model.Node{}).Where("id = ?", id).Updates(map[string]interface{}{"status": status, "message": message}).Error
 }
 
+// runCommand runs one shell command on the node and returns its combined output.
+func runCommand(client *ssh.SSHClient, cmd, stdin string) (string, error) {
+	session, err := client.Client.NewSession()
+	if err != nil {
+		return "", err
+	}
+	defer session.Close()
+	if stdin != "" {
+		session.Stdin = strings.NewReader(stdin)
+	}
+	out, err := session.CombinedOutput(cmd)
+	return string(out), err
+}
+
 // installViaSSH pushes the agent, certificates and unit to the machine and starts it.
 func installViaSSH(id uint, req SSHInstall) {
 	fail := func(err error) {
@@ -155,19 +170,20 @@ func installViaSSH(id uint, req SSHInstall) {
 		return
 	}
 	defer client.Close()
+	// A password sudo works too: every privileged command is fed `sudo -S`, reading the
+	// password from stdin ahead of its own input.
 	sudo := client.SudoHandleCmd()
+	stdinHead := ""
 	if req.User != "root" && sudo == "" {
-		fail(errors.New("a root user or passwordless sudo is required"))
-		return
+		sudo = "sudo -S -p '' "
+		stdinHead = req.Password + "\n"
+		if out, err := runCommand(client, stdinHead+"sudo -S -p '' -v", ""); err != nil {
+			fail(fmt.Errorf("sudo authentication failed for %s: %s", req.User, strings.TrimSpace(out)))
+			return
+		}
 	}
 	run := func(cmd string) (string, error) {
-		session, err := client.Client.NewSession()
-		if err != nil {
-			return "", err
-		}
-		defer session.Close()
-		out, err := session.CombinedOutput(cmd)
-		return string(out), err
+		return runCommand(client, cmd, "")
 	}
 	if out, err := run("uname -m"); err != nil || strings.TrimSpace(out) != unameArch() {
 		fail(fmt.Errorf("architecture mismatch: master is %s, node reports %q", unameArch(), strings.TrimSpace(out)))
@@ -189,7 +205,8 @@ func installViaSSH(id uint, req SSHInstall) {
 		fail(err)
 		return
 	}
-	upload.Stdin = f
+	// stdin carries the password line first, then the binary itself
+	upload.Stdin = io.MultiReader(strings.NewReader(stdinHead), f)
 	err = upload.Run(fmt.Sprintf("%smkdir -p /usr/local/bin && %stee %s.new >/dev/null && %schmod +x %s.new", sudo, sudo, agentBinaryDest, sudo, agentBinaryDest))
 	upload.Close()
 	if err != nil {
@@ -206,14 +223,15 @@ func installViaSSH(id uint, req SSHInstall) {
 		fail(err)
 		return
 	}
-	bundle.Stdin = strings.NewReader(script)
+	// sudo reads its password from stdin first; the bundle follows in the same stream
+	bundle.Stdin = strings.NewReader(stdinHead + script)
 	out, err := bundle.CombinedOutput(sudo + "bash -s")
 	bundle.Close()
 	if err != nil {
 		fail(fmt.Errorf("write node config failed: %s %w", strings.TrimSpace(string(out)), err))
 		return
 	}
-	if out, err := run(fmt.Sprintf("%sbash -c 'mv -f %s.new %s && %s'", sudo, agentBinaryDest, agentBinaryDest, startScript)); err != nil {
+	if out, err := runCommand(client, stdinHead+fmt.Sprintf("%sbash -c 'mv -f %s.new %s && %s'", sudo, agentBinaryDest, agentBinaryDest, startScript), ""); err != nil {
 		fail(fmt.Errorf("start agent failed: %s %w", strings.TrimSpace(out), err))
 		return
 	}
