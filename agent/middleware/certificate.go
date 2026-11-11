@@ -19,6 +19,12 @@ var loadNodeProxyID = func() (string, error) {
 	return cmd.NewCommandMgr(cmd.WithTimeout(20*time.Second)).RunWithStdout("cat", "/etc/1panel/.nodeProxyID")
 }
 
+// isLocalSocket reports whether the request arrived over this machine's agent.sock. Go
+// reports abstract unix peers as "@", filesystem ones as a path ending in ".sock".
+func isLocalSocket(remoteAddr string) bool {
+	return remoteAddr == "@" || strings.HasSuffix(remoteAddr, ".sock")
+}
+
 func Certificate() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if global.IsMaster {
@@ -44,7 +50,7 @@ func Certificate() gin.HandlerFunc {
 			c.AbortWithStatus(http.StatusForbidden)
 			return
 		}
-		if masterProxyID == "" && strings.HasSuffix(c.Request.RemoteAddr, ".sock") {
+		if masterProxyID == "" && isLocalSocket(c.Request.RemoteAddr) {
 			c.Next()
 			return
 		}

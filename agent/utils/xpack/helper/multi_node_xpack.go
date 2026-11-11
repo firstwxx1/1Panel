@@ -100,7 +100,7 @@ func (m *multiNodeHelper) LoadRequestTransport() *http.Transport {
 // over the local unix socket (no TLS at all) come from the machine's own core and pass.
 func (m *multiNodeHelper) ValidateCertificate(c *gin.Context) bool {
 	if c.Request.TLS == nil {
-		return strings.HasSuffix(c.Request.RemoteAddr, ".sock") || c.Request.RemoteAddr == "@"
+		return c.Request.RemoteAddr == "@" || strings.HasSuffix(c.Request.RemoteAddr, ".sock")
 	}
 	return len(c.Request.TLS.VerifiedChains) > 0
 }
