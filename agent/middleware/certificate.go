@@ -49,6 +49,7 @@ func Certificate() gin.HandlerFunc {
 			return
 		}
 		if err == nil && len(proxyID) != 0 && strings.TrimSpace(proxyID) != strings.TrimSpace(masterProxyID) {
+			global.LOG.Warnf("rejected request from %s: proxy-id %q, want %q", c.Request.RemoteAddr, masterProxyID, proxyID)
 			helper.InternalServer(c, fmt.Errorf("err proxy id"))
 			return
 		}
