@@ -152,6 +152,7 @@ func runCommand(client *ssh.SSHClient, cmd, stdin string) (string, error) {
 
 // installViaSSH pushes the agent, certificates and unit to the machine and starts it.
 func installViaSSH(id uint, req SSHInstall) {
+	global.LOG.Infof("install node %d via ssh: connecting %s@%s:%d", id, req.User, req.Addr, req.Port)
 	fail := func(err error) {
 		global.LOG.Errorf("install node %d via ssh failed: %v", id, err)
 		setStatus(id, statusFailed, err.Error())
