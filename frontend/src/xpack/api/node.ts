@@ -11,6 +11,7 @@ export interface NodeRow {
     description: string;
     isFavorite: boolean;
     isLocal: boolean;
+    isBound?: boolean;
     status: string;
     message: string;
     version: string;

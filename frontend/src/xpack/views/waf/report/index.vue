@@ -30,7 +30,7 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
-import { getWafReport, WafReport } from '@/xpack/api/waf';
+import { getWafReportAgg, WafReport } from '@/xpack/api/waf';
 
 const blocks = [
     { key: 'attackType', field: 'types' },
@@ -40,7 +40,7 @@ const blocks = [
     { key: 'topCountry', field: 'countries' },
 ];
 const range = ref('today');
-const data = reactive<WafReport>({ total: 0, types: [], ips: [], websites: [], uris: [], countries: [] });
+const data = reactive<WafReport>({ total: 0, types: [], ips: [], websites: [], uris: [], countries: [], provinces: [] });
 
 const fmt = (d: Date) => {
     const p = (n: number) => String(n).padStart(2, '0');
@@ -62,8 +62,8 @@ const load = async () => {
     } else if (range.value === '30d') {
         start = new Date(day0.getTime() - 29 * 86400000);
     }
-    const res = await getWafReport({ start: fmt(start), end: fmt(end) });
-    Object.assign(data, res.data);
+    const res = await getWafReportAgg({ start: fmt(start), end: fmt(end) });
+    Object.assign(data, res);
 };
 
 onMounted(load);

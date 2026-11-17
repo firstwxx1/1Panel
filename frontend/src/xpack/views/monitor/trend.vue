@@ -31,7 +31,7 @@
 import { onMounted, ref } from 'vue';
 import LineChart from '@/components/v-charts/components/Line.vue';
 import SiteSelect from './SiteSelect.vue';
-import { monOverview, MonSiteItem, MonTrend } from '@/xpack/api/monitor';
+import { monOverviewAgg, MonSiteItem, MonTrend } from '@/xpack/api/monitor';
 import { dayParams, todayRange, trendOption } from './util';
 import i18n from '@/lang';
 
@@ -48,7 +48,7 @@ const charts = [
 ] as const;
 const option = (c: (typeof charts)[number]) => trendOption(trend.value, c.title, c.key);
 const load = async () => {
-    trend.value = (await monOverview({ site: site.value, ...dayParams(dates.value) })).data.trend || [];
+    trend.value = (await monOverviewAgg({ site: site.value, ...dayParams(dates.value) })).trend || [];
 };
 onMounted(load);
 </script>

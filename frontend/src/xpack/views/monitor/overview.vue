@@ -87,17 +87,19 @@ import LineChart from '@/components/v-charts/components/Line.vue';
 import WafMap from '@/xpack/views/waf/map/index.vue';
 import SiteSelect from './SiteSelect.vue';
 import {
-    monDistribution,
     MonDistItem,
+    monDistributionAgg,
     monGetSettings,
-    monLive,
-    monOverview,
+    monLiveAgg,
+    monOverviewAgg,
     monSaveSettings,
     MonSettings,
     MonSiteItem,
     MonTotals,
     MonTrend,
+    splitSite,
 } from '@/xpack/api/monitor';
+import { isMasterView } from '@/xpack/api/aggregate';
 import { fmtBytes, trendOption } from './util';
 import i18n from '@/lang';
 
@@ -113,7 +115,7 @@ const trend = ref<MonTrend[]>([]);
 const mapKind = ref<'world' | 'china'>('world');
 const countries = ref<MonDistItem[]>([]);
 const provinces = ref<MonDistItem[]>([]);
-const live = ref<{ req: number; bytes: number; series: { req: number; bytes: number }[] }>({ req: 0, bytes: 0, series: [] });
+const live = ref<{ req: number; bytes: number; series: { time: number; req: number; bytes: number }[] }>({ req: 0, bytes: 0, series: [] });
 let timer: number | undefined;
 
 const mapData = computed(() => (mapKind.value === 'china' ? provinces.value : countries.value));
@@ -143,21 +145,21 @@ const liveOption = (key: 'req' | 'bytes') => ({
 });
 
 const loadTotals = async () => {
-    totals.value = (await monOverview({ site: site.value, range: 'today' })).data.current;
+    totals.value = (await monOverviewAgg({ site: site.value, range: 'today' })).current;
 };
 const loadTrend = async () => {
-    trend.value = (await monOverview({ site: site.value, range: range.value })).data.trend || [];
+    trend.value = (await monOverviewAgg({ site: site.value, range: range.value })).trend || [];
 };
 const loadMap = async () => {
     const [c, p] = await Promise.all([
-        monDistribution({ site: site.value, range: '30d', dim: 'country', limit: 100 }),
-        monDistribution({ site: site.value, range: '30d', dim: 'province', limit: 100 }),
+        monDistributionAgg({ site: site.value, range: '30d', dim: 'country', limit: 100 }),
+        monDistributionAgg({ site: site.value, range: '30d', dim: 'province', limit: 100 }),
     ]);
-    countries.value = c.data || [];
-    provinces.value = p.data || [];
+    countries.value = c || [];
+    provinces.value = p || [];
 };
 const loadLive = async () => {
-    live.value = (await monLive(site.value)).data;
+    live.value = await monLiveAgg(site.value);
 };
 const reload = () => {
     loadTotals();
@@ -165,7 +167,13 @@ const reload = () => {
     loadMap();
     loadLive();
 };
+// on the master view there is no single switch/config — each node keeps its own, so the
+// enable banner only makes sense (and only appears) on a single-node view
 const loadCfg = async () => {
+    if (isMasterView()) {
+        cfg.value = null;
+        return;
+    }
     cfg.value = (await monGetSettings()).data;
 };
 const enableAll = async () => {
@@ -174,7 +182,7 @@ const enableAll = async () => {
     try {
         const { siteList, hasRt, ...rest } = cfg.value;
         const sites: Record<string, boolean> = { ...rest.sites };
-        props.sites.forEach((s) => (sites[s.alias] = true));
+        props.sites.forEach((s) => (sites[splitSite(s.alias).alias] = true));
         await monSaveSettings({ ...rest, enabled: true, sites });
         ElMessage.success(t('pro.monitor.saved'));
         await loadCfg();

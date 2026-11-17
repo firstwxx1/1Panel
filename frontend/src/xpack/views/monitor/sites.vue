@@ -21,6 +21,9 @@
                 </el-select>
             </div>
             <el-table :data="pageRows" v-loading="loading" @sort-change="onSort">
+                <el-table-column v-if="isMaster" prop="node" :label="$t('xpack.monitor.node')" sortable="custom" min-width="120">
+                    <template #default="{ row }">{{ row.node || '-' }}</template>
+                </el-table-column>
                 <el-table-column prop="name" :label="$t('pro.monitor.website')" sortable="custom" min-width="160" />
                 <el-table-column v-for="c in cols" :key="c.prop" :prop="c.prop" :label="c.label" sortable="custom" min-width="100">
                     <template #default="{ row }">{{ c.fmt ? c.fmt(row[c.prop]) : row[c.prop] }}</template>
@@ -41,7 +44,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
-import { monSites, MonSiteItem, MonSiteRow } from '@/xpack/api/monitor';
+import { monSitesAgg, MonSiteItem, MonSiteRowNode } from '@/xpack/api/monitor';
+import { isMasterView } from '@/xpack/api/aggregate';
 import { dayParams, fmtBytes, todayRange } from './util';
 import i18n from '@/lang';
 
@@ -49,7 +53,8 @@ defineProps<{ sites: MonSiteItem[] }>();
 const t = i18n.global.t;
 const dates = ref<Date[]>(todayRange());
 const loading = ref(false);
-const rows = ref<(MonSiteRow & { name: string })[]>([]);
+const rows = ref<(MonSiteRowNode & { name: string })[]>([]);
+const isMaster = computed(() => isMasterView());
 const page = ref(1);
 const size = ref(20);
 const refresh = ref(0);
@@ -80,8 +85,8 @@ const onSort = (s: { prop: string; order: string | null }) => (sort.value = s);
 const load = async () => {
     loading.value = true;
     try {
-        const res = await monSites({ site: '', ...dayParams(dates.value) });
-        rows.value = (res.data || []).map((r) => ({ ...r, name: r.domain || r.alias }));
+        const list = await monSitesAgg({ site: '', ...dayParams(dates.value) });
+        rows.value = (list || []).map((r) => ({ ...r, name: r.domain || r.alias }));
     } finally {
         loading.value = false;
     }

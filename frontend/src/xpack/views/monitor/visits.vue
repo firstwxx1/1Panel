@@ -49,7 +49,7 @@
 <script setup lang="ts">
 import { h, onMounted, ref } from 'vue';
 import SiteSelect from './SiteSelect.vue';
-import { monDistribution, MonDistItem, MonSiteItem } from '@/xpack/api/monitor';
+import { monDistributionAgg, MonDistItem, MonSiteItem } from '@/xpack/api/monitor';
 import { dayParams, todayRange } from './util';
 import i18n from '@/lang';
 
@@ -91,11 +91,11 @@ const List = (p: { items: MonDistItem[] }) =>
           )
         : h('div', { class: 'empty' }, t('pro.monitor.noData'));
 
-const query = (dim: string, limit: number) => monDistribution({ site: site.value, dim, limit, ...dayParams(dates.value) });
+const query = (dim: string, limit: number) => monDistributionAgg({ site: site.value, dim, limit, ...dayParams(dates.value) });
 const load = async () => {
     const all = [...first.value, ...second.value];
     const res = await Promise.all(all.map((b) => query(b.dim, 10)));
-    all.forEach((b, i) => (b.items = res[i].data || []));
+    all.forEach((b, i) => (b.items = res[i] || []));
 };
 
 const dialog = ref(false);
@@ -103,7 +103,7 @@ const dialogTitle = ref('');
 const dialogItems = ref<MonDistItem[]>([]);
 const more = async (b: Block) => {
     dialogTitle.value = b.title;
-    dialogItems.value = (await query(b.dim, 100)).data || [];
+    dialogItems.value = (await query(b.dim, 100)) || [];
     dialog.value = true;
 };
 onMounted(load);

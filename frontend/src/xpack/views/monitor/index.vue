@@ -8,8 +8,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
-import { monGetSettings, MonSiteItem } from '@/xpack/api/monitor';
+import { computed, onMounted, ref, watch } from 'vue';
+import { mergedSiteList, MonSiteItem } from '@/xpack/api/monitor';
+import { GlobalStore } from '@/store';
 import Overview from './overview.vue';
 import Visits from './visits.vue';
 import Trend from './trend.vue';
@@ -26,11 +27,17 @@ const tabs = [
     { key: 'settings', comp: Settings },
 ];
 const activeTab = ref('overview');
+const globalStore = GlobalStore();
 const current = computed(() => tabs.find((t) => t.key === activeTab.value)?.comp);
 const sites = ref<MonSiteItem[]>([]);
 const loadSites = async () => {
-    const res = await monGetSettings();
-    sites.value = res.data.siteList || [];
+    // on the master this unions every node's sites (aliases prefixed with the node);
+    // on a single node it is just that node's siteList
+    sites.value = await mergedSiteList();
 };
+watch(
+    () => globalStore.currentNode,
+    () => loadSites(),
+);
 onMounted(loadSites);
 </script>

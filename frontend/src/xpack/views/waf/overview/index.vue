@@ -66,7 +66,7 @@
 import { computed, onMounted, ref } from 'vue';
 import LineChart from '@/components/v-charts/components/Line.vue';
 import WafMap from '@/xpack/views/waf/map/index.vue';
-import { getWafOverview, getWafReport, WafBucket, WafDayStat } from '@/xpack/api/waf';
+import { getWafOverviewAgg, getWafReportAgg, WafBucket, WafDayStat } from '@/xpack/api/waf';
 import i18n from '@/lang';
 
 const t = i18n.global.t;
@@ -131,11 +131,11 @@ const blkOption = computed(() => ({
 }));
 
 onMounted(async () => {
-    const [ov, rp] = await Promise.all([getWafOverview(), getWafReport({})]);
-    today.value = ov.data.today;
-    trend.value = ov.data.trend || [];
-    countries.value = rp.data.countries || [];
-    provinces.value = rp.data.provinces || [];
+    const [ov, rp] = await Promise.all([getWafOverviewAgg(), getWafReportAgg({})]);
+    today.value = ov.today;
+    trend.value = ov.trend || [];
+    countries.value = rp.countries || [];
+    provinces.value = rp.provinces || [];
     loaded.value = true;
 });
 </script>

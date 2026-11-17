@@ -38,8 +38,11 @@
                 </div>
             </div>
 
-            <el-table :data="items" v-loading="loading" size="small" @selection-change="(v: WafAttackLog[]) => (selected = v)">
+            <el-table :data="items" v-loading="loading" size="small" @selection-change="(v: WafLogNode[]) => (selected = v)">
                 <el-table-column type="selection" width="45" />
+                <el-table-column v-if="isMaster" prop="node" :label="$t('xpack.monitor.node')" min-width="110" show-overflow-tooltip>
+                    <template #default="{ row }">{{ row.node || '-' }}</template>
+                </el-table-column>
                 <el-table-column prop="ip" label="IP" min-width="130" />
                 <el-table-column prop="host" :label="$t('pro.waf.domain')" min-width="160" show-overflow-tooltip />
                 <el-table-column prop="uri" label="URL" min-width="220" show-overflow-tooltip />
@@ -58,7 +61,7 @@
                 <el-table-column :label="$t('commons.table.operate')" width="150" fixed="right">
                     <template #default="{ row }">
                         <el-button link type="primary" @click="openDetail(row)">{{ $t('commons.button.view') }}</el-button>
-                        <el-button link type="danger" @click="blockOne(row.ip)">{{ $t('pro.waf.blockIp') }}</el-button>
+                        <el-button link type="danger" @click="blockOne(row.ip, row.node)">{{ $t('pro.waf.blockIp') }}</el-button>
                     </template>
                 </el-table-column>
             </el-table>
@@ -115,22 +118,24 @@ import { useI18n } from 'vue-i18n';
 import {
     clearWafLogs,
     exportWafLogs,
-    getWafLogOptions,
+    getWafLogOptionsAgg,
     saveWafRule,
-    searchWafLogs,
-    WafAttackLog,
+    searchWafLogsAgg,
+    WafLogNode,
     WafLogOptions,
     WafLogQuery,
 } from '@/xpack/api/waf';
+import { isMasterView, nodeQuery } from '@/xpack/api/aggregate';
 
 const { t, te } = useI18n();
 const query = reactive<WafLogQuery>({ website: '', ruleType: '', action: '', host: '', url: '', ip: '', location: '', page: 1, size: 20 });
 const options = ref<WafLogOptions>({ websites: [], ruleTypes: [], actions: [] });
-const items = ref<WafAttackLog[]>([]);
+const items = ref<WafLogNode[]>([]);
+const isMaster = computed(() => isMasterView());
 const total = ref(0);
 const loading = ref(false);
-const selected = ref<WafAttackLog[]>([]);
-const detail = ref<WafAttackLog | null>(null);
+const selected = ref<WafLogNode[]>([]);
+const detail = ref<WafLogNode | null>(null);
 const rangeDialog = ref(false);
 const range = ref('');
 const refresh = ref(0);
@@ -165,32 +170,44 @@ const filter = () => {
 const search = async () => {
     loading.value = true;
     try {
-        const res = await searchWafLogs({ ...query });
-        items.value = res.data.items;
-        total.value = res.data.total;
+        const res = await searchWafLogsAgg({ ...query });
+        items.value = res.items;
+        total.value = res.total;
     } finally {
         loading.value = false;
     }
 };
 
-const openDetail = (row: WafAttackLog) => (detail.value = row);
+const openDetail = (row: WafLogNode) => (detail.value = row);
 
-const addBlack = async (rule: string) => {
-    await saveWafRule('ipBlack', '', { state: 'on', name: rule, rule, type: 'ipv4' }, '');
+// rule writes go to one node's WAF: on the aggregated master view the row's `node`
+// routes the write back to the node the log came from
+const saveRule = (node: string, name: string, site: string, rule: object, oldId: string) =>
+    node
+        ? nodeQuery(node, '/xpack/waf/rules/save', { name, site, rule, oldId })
+        : saveWafRule(name as any, site, rule as any, oldId);
+
+const addBlack = async (rule: string, node = '') => {
+    await saveRule(node, 'ipBlack', '', { state: 'on', name: rule, rule, type: 'ipv4' }, '');
     ElMessage.success(t('pro.waf.blockSuccess'));
 };
 
-const blockOne = (ip: string) => addBlack(ip);
+const blockOne = (ip: string, node = '') => addBlack(ip, node);
 
 const blockSelected = async () => {
     for (const row of selected.value) {
-        await saveWafRule('ipBlack', '', { state: 'on', name: row.ip, rule: row.ip, type: 'ipv4' }, '');
+        await saveRule(row.node || '', 'ipBlack', '', { state: 'on', name: row.ip, rule: row.ip, type: 'ipv4' }, '');
     }
     ElMessage.success(t('pro.waf.blockSuccess'));
 };
 
 const blockRange = async () => {
     if (!range.value) return;
+    // a manual range has no source row to tell which node it belongs to
+    if (isMaster.value) {
+        ElMessage.warning(t('pro.waf.clearNeedNode'));
+        return;
+    }
     await addBlack(range.value);
     rangeDialog.value = false;
     range.value = '';
@@ -198,12 +215,17 @@ const blockRange = async () => {
 
 const whiteUrl = async () => {
     for (const row of selected.value) {
-        await saveWafRule('urlWhite', '', { state: 'on', name: row.uri, rule: row.uri, type: 'url' }, '');
+        await saveRule(row.node || '', 'urlWhite', '', { state: 'on', name: row.uri, rule: row.uri, type: 'url' }, '');
     }
     ElMessage.success(t('pro.waf.whiteSuccess'));
 };
 
 const clearAll = async () => {
+    // clearing wipes one node's store: on the aggregated view point the user at the node instead
+    if (isMaster.value) {
+        ElMessage.warning(t('pro.waf.clearNeedNode'));
+        return;
+    }
     await ElMessageBox.confirm(t('pro.waf.clearLogConfirm'), t('pro.waf.clearLogs'), { type: 'warning' });
     await clearWafLogs();
     ElMessage.success(t('pro.waf.clearSuccess'));
@@ -211,6 +233,24 @@ const clearAll = async () => {
 };
 
 const exportCsv = async () => {
+    // the backend export only covers one node; on the master export the merged rows
+    if (isMaster.value) {
+        const res = await searchWafLogsAgg({ ...query, page: 1, size: 5000 });
+        const csv = (v: any) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+        const head = ['time', 'node', 'ip', 'host', 'uri', 'method', 'ruleType', 'rule', 'action', 'country', 'province', 'userAgent'];
+        const lines = res.items.map((r) =>
+            [r.time, r.node, r.ip, r.host, r.uri, r.method, r.ruleType, r.rule, r.action, r.country, r.province, r.userAgent]
+                .map(csv)
+                .join(','),
+        );
+        const blob = new Blob(['﻿' + head.join(',') + '\n' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'waf-log.csv';
+        a.click();
+        URL.revokeObjectURL(a.href);
+        return;
+    }
     const blob = await exportWafLogs({ ...query });
     const url = window.URL.createObjectURL(new Blob([blob], { type: 'text/csv' }));
     const a = document.createElement('a');
@@ -226,7 +266,7 @@ watch(refresh, (v) => {
 });
 
 onMounted(async () => {
-    options.value = (await getWafLogOptions()).data || options.value;
+    options.value = (await getWafLogOptionsAgg()) || options.value;
     search();
 });
 

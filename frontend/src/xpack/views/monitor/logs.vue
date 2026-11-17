@@ -54,6 +54,9 @@
                 </el-select>
             </div>
             <el-table :data="items" v-loading="loading" @sort-change="onSort">
+                <el-table-column v-if="isMaster" prop="node" :label="$t('xpack.monitor.node')" min-width="110" show-overflow-tooltip>
+                    <template #default="{ row }">{{ row.node || '-' }}</template>
+                </el-table-column>
                 <el-table-column prop="ip" label="IP" min-width="130" />
                 <el-table-column prop="region" :label="$t('pro.monitor.ipRegion')" min-width="130" />
                 <el-table-column :label="$t('pro.monitor.domain')" min-width="150">
@@ -101,11 +104,12 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import SiteSelect from './SiteSelect.vue';
-import { monClear, monLogs, MonHit, MonLogStats, MonSiteItem } from '@/xpack/api/monitor';
+import { monClear, monLogsAgg, MonHitNode, MonLogStats, MonSiteItem, splitSite } from '@/xpack/api/monitor';
+import { isMasterView, nodeQuery } from '@/xpack/api/aggregate';
 import { fmtBytes, timeParams } from './util';
 import i18n from '@/lang';
 
@@ -116,7 +120,7 @@ const statuses = ['2xx', '3xx', '4xx', '5xx', '200', '301', '302', '304', '403',
 const f = reactive({ site: '', method: '', status: '', spider: '', url: '', ip: '', region: '' });
 const now = new Date();
 const dates = ref<Date[]>([new Date(now.getFullYear(), now.getMonth(), now.getDate()), new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59)]);
-const items = ref<MonHit[]>([]);
+const items = ref<MonHitNode[]>([]);
 const stats = ref<MonLogStats>({ req: 0, ok: 0, err: 0, ips: 0, spiders: 0, avgRt: 0, bytes: 0 });
 const logSize = ref(0);
 const total = ref(0);
@@ -124,18 +128,22 @@ const page = ref(1);
 const size = ref(20);
 const loading = ref(false);
 const refresh = ref(0);
-const detail = ref<MonHit | null>(null);
+const detail = ref<MonHitNode | null>(null);
 const sortRt = ref<string | null>(null);
+const isMaster = computed(() => isMasterView());
 let timer: number | undefined;
 
-const domainOf = (alias: string) => props.sites.find((s) => s.alias === alias)?.domain || alias;
+const domainOf = (alias: string) => {
+    // hits from a specific node carry it in row.node; the merged site list is keyed by "node::alias"
+    const s = props.sites.find((x) => splitSite(x.alias).alias === alias);
+    return s?.domain || alias;
+};
 const req = (p: number, s: number) => ({ ...f, ...timeParams(dates.value), page: p, size: s });
 
 const load = async () => {
     loading.value = true;
     try {
-        const res = await monLogs(req(page.value, size.value));
-        const d = res.data;
+        const d = await monLogsAgg(req(page.value, size.value));
         items.value = d.items || [];
         if (sortRt.value) {
             const dir = sortRt.value === 'ascending' ? 1 : -1;
@@ -161,17 +169,40 @@ const setTimer = () => {
     timer = refresh.value ? window.setInterval(load, refresh.value * 1000) : undefined;
 };
 const clear = async () => {
+    // clearing writes to one node: on the master view require a specific site so we know which one
+    const { node, alias } = splitSite(f.site);
+    if (isMaster.value && !node) {
+        ElMessage.warning(t('pro.monitor.clearNeedSite'));
+        return;
+    }
     await ElMessageBox.confirm(t('pro.monitor.clearConfirm'), t('pro.monitor.clearLog'), { type: 'warning' });
-    await monClear(f.site);
+    if (isMaster.value) {
+        await nodeQuery(node, '/xpack/monitor/clear', { site: alias });
+    } else {
+        await monClear(f.site);
+    }
     ElMessage.success(t('pro.monitor.saved'));
     search();
 };
 const csv = (v: any) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
 const exportCsv = async () => {
-    const res = await monLogs(req(1, 5000));
-    const head = ['time', 'ip', 'region', 'domain', 'method', 'url', 'status', 'bytes', 'rt', 'referer', 'ua'];
-    const lines = (res.data.items || []).map((h) =>
-        [new Date(h.time * 1000).toISOString(), h.ip, h.region, domainOf(h.site), h.method, h.url, h.status, h.bytes, h.rt, h.referer, h.ua]
+    const res = await monLogsAgg(req(1, 5000));
+    const head = ['time', 'node', 'ip', 'region', 'domain', 'method', 'url', 'status', 'bytes', 'rt', 'referer', 'ua'];
+    const lines = (res.items || []).map((h) =>
+        [
+            new Date(h.time * 1000).toISOString(),
+            h.node,
+            h.ip,
+            h.region,
+            domainOf(h.site),
+            h.method,
+            h.url,
+            h.status,
+            h.bytes,
+            h.rt,
+            h.referer,
+            h.ua,
+        ]
             .map(csv)
             .join(','),
     );
