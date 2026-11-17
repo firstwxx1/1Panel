@@ -145,7 +145,8 @@ export async function getWafOverviewAgg(): Promise<WafOverview> {
     if (!isMasterView()) {
         return (await getWafOverview()).data;
     }
-    const parts = await fanOut((n) => nodeQuery<WafOverview>(n, '/xpack/waf/overview', {}));
+    // /overview is a GET route on the agent, so it must go through httpGetNode, not the POST helper
+    const parts = await fanOut((n) => httpGetNode<WafOverview>(n, '/xpack/waf/overview'));
     const numKeys = ['reqCount', 'attackCount', 'count4xx', 'count5xx'] as const;
     const today: WafDayStat = { day: '', reqCount: 0, attackCount: 0, count4xx: 0, count5xx: 0 };
     for (const p of parts) {
