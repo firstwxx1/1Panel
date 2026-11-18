@@ -25,7 +25,7 @@ const render = () => {
     const isChina = props.kind === 'china';
     const mapName = isChina ? 'china' : 'world';
     if (!(echarts as any).getMap(mapName)) {
-        echarts.registerMap(mapName, isChina ? chinaJson : worldJson);
+        echarts.registerMap(mapName, (isChina ? chinaJson : worldJson) as any);
     }
     const items = (props.data || [])
         .map((d) => ({ name: isChina ? provinceToChina(d.name) : countryToWorld(d.name), value: d.count }))

@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/1Panel-dev/1Panel/agent/utils/xpack"
+	"github.com/1Panel-dev/1Panel/agent/xpack/monitor"
+	"github.com/1Panel-dev/1Panel/agent/xpack/tamper"
 
 	"github.com/1Panel-dev/1Panel/agent/app/repo"
 
@@ -785,9 +787,17 @@ func delNginxConfig(website model.Website, force bool) error {
 			return err
 		}
 	}
+	if website.Alias != "" {
+		xpack.MultiNodeProvider.RemoveTamper(website.Alias)
+		if ts, err := tamper.DefaultStore(); err == nil && ts != nil {
+			_ = ts.RemoveSite(website.Alias)
+		}
+		if ms, err := monitor.DefaultStore(); err == nil && ms != nil {
+			_ = ms.RemoveSite(website.Alias)
+		}
+	}
 	sitePath := GetSiteDir(website.Alias)
 	if fileOp.Stat(sitePath) {
-		xpack.MultiNodeProvider.RemoveTamper(website.Alias)
 		_ = fileOp.DeleteDir(sitePath)
 	}
 

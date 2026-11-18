@@ -130,8 +130,19 @@ const blkOption = computed(() => ({
     yData: yData('attackCount', t('pro.waf.intercept')),
 }));
 
+const fmtDateTime = (d: Date) => {
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+};
+
 onMounted(async () => {
-    const [ov, rp] = await Promise.all([getWafOverviewAgg(), getWafReportAgg({})]);
+    const now = new Date();
+    const day0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const start30d = new Date(day0.getTime() - 29 * 86400000);
+    const [ov, rp] = await Promise.all([
+        getWafOverviewAgg(),
+        getWafReportAgg({ start: fmtDateTime(start30d), end: fmtDateTime(now) }),
+    ]);
     today.value = ov.today;
     trend.value = ov.trend || [];
     countries.value = rp.countries || [];

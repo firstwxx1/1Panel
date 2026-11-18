@@ -61,6 +61,18 @@ var (
 
 	localMu   sync.RWMutex
 	localInfo = NodeView{Name: "local", Kind: kindNode, Addr: "127.0.0.1", Status: statusHealthy, IsLocal: true}
+
+	panelTransport = &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		DialContext: (&net.Dialer{
+			Timeout:   8 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout: 5 * time.Second,
+		MaxIdleConns:        50,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     60 * time.Second,
+	}
 )
 
 func collectLoop() {
@@ -78,6 +90,7 @@ func collectOnce() {
 			global.LOG.Errorf("node collector panic: %v", r)
 		}
 	}()
+	_, _, _ = ensureMasterGeoIP()
 	collectLocal()
 	var nodes []model.Node
 	if err := global.DB.Where("kind IN ?", []string{kindNode, kindPanel}).Find(&nodes).Error; err != nil {
@@ -169,6 +182,7 @@ func agentGet(n model.Node, path string, timeout time.Duration) (json.RawMessage
 }
 
 func recordFailure(n model.Node, err error) {
+	clearGeoSynced(n.ID)
 	failMu.Lock()
 	failCount[n.ID]++
 	count := failCount[n.ID]
@@ -176,7 +190,11 @@ func recordFailure(n model.Node, err error) {
 	update := map[string]interface{}{"message": err.Error()}
 	switch {
 	case n.Status == statusInstalling:
-		if time.Since(n.CreatedAt) > installTimeout {
+		ref := n.UpdatedAt
+		if ref.IsZero() {
+			ref = n.CreatedAt
+		}
+		if time.Since(ref) > installTimeout {
 			update["status"] = statusFailed
 		}
 	case count >= failLimit && n.Status == statusHealthy:
@@ -199,6 +217,7 @@ func checkNode(n model.Node) {
 	failMu.Lock()
 	delete(failCount, n.ID)
 	failMu.Unlock()
+	justJoined := n.Status == statusInstalling
 	update := map[string]interface{}{
 		"status": statusHealthy, "message": "", "last_seen": time.Now(),
 		"cpu_total": m.CPUTotal, "cpu_used_percent": m.CPUUsedPercent,
@@ -206,10 +225,18 @@ func checkNode(n model.Node) {
 	}
 	if raw, err := agentGet(n, "/api/v2/xpack/node/ping", 4*time.Second); err == nil {
 		var ping struct {
-			Version string `json:"version"`
+			Version  string `json:"version"`
+			HasGeoIP *bool  `json:"hasGeoIP"`
 		}
-		if json.Unmarshal(raw, &ping) == nil && ping.Version != "" {
-			update["version"] = ping.Version
+		if json.Unmarshal(raw, &ping) == nil {
+			if ping.Version != "" {
+				update["version"] = ping.Version
+			}
+			if ping.HasGeoIP != nil {
+				maybeSyncNodeGeoIP(n, *ping.HasGeoIP)
+			} else {
+				maybeSyncNodeGeoIP(n, false)
+			}
 		}
 	}
 	if n.SystemVersion == "" {
@@ -221,6 +248,9 @@ func checkNode(n model.Node) {
 		}
 	}
 	_ = global.DB.Model(&model.Node{}).Where("id = ?", n.ID).Updates(update).Error
+	if justJoined {
+		go func() { _ = Default.Sync("") }()
+	}
 }
 
 // panelURL builds the base URL of a bookmarked panel.
@@ -232,35 +262,42 @@ func panelURL(n model.Node) string {
 	return fmt.Sprintf("%s://%s", proto, net.JoinHostPort(n.Addr, fmt.Sprint(n.Port)))
 }
 
-func panelCall(n model.Node, path string) (json.RawMessage, error) {
+func panelCall(n model.Node, method, path string) (json.RawMessage, error) {
 	key, err := encrypt.StringDecrypt(n.APIKey)
 	if err != nil || key == "" {
 		return nil, fmt.Errorf("api key is not set")
 	}
 	ts := fmt.Sprint(time.Now().Unix())
 	sum := md5.Sum([]byte("1panel" + key + ts))
-	req, err := http.NewRequest(http.MethodGet, panelURL(n)+path, nil)
+	var body io.Reader
+	if method == http.MethodPost {
+		body = strings.NewReader("{}")
+	}
+	req, err := http.NewRequest(method, panelURL(n)+path, body)
 	if err != nil {
 		return nil, err
 	}
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("1Panel-Token", hex.EncodeToString(sum[:]))
 	req.Header.Set("1Panel-Timestamp", ts)
-	client := &http.Client{Timeout: 8 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+	client := &http.Client{Timeout: 8 * time.Second, Transport: panelTransport}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	var env envelope
-	if err := json.Unmarshal(body, &env); err != nil || env.Code != 200 {
+	if err := json.Unmarshal(respBody, &env); err != nil || env.Code != 200 {
 		return nil, fmt.Errorf("panel returned %d", resp.StatusCode)
 	}
 	return env.Data, nil
 }
 
 func checkPanel(n model.Node) {
-	raw, err := panelCall(n, "/api/v2/core/settings/search")
+	raw, err := panelCall(n, http.MethodPost, "/api/v2/core/settings/search")
 	if err != nil {
 		_ = global.DB.Model(&model.Node{}).Where("id = ?", n.ID).
 			Updates(map[string]interface{}{"status": statusUnhealthy, "message": strings.TrimSpace(err.Error())}).Error
@@ -271,7 +308,7 @@ func checkPanel(n model.Node) {
 	}
 	_ = json.Unmarshal(raw, &s)
 	update := map[string]interface{}{"status": statusHealthy, "message": "", "version": s.SystemVersion, "last_seen": time.Now()}
-	if raw, err := panelCall(n, "/api/v2/dashboard/current/node"); err == nil {
+	if raw, err := panelCall(n, http.MethodGet, "/api/v2/dashboard/current/node"); err == nil {
 		var m metrics
 		if json.Unmarshal(raw, &m) == nil {
 			update["cpu_total"], update["cpu_used_percent"] = m.CPUTotal, m.CPUUsedPercent
@@ -284,7 +321,7 @@ func checkPanel(n model.Node) {
 // probeNow runs one immediate health probe, used by "test connection".
 func probeNow(n model.Node) error {
 	if n.Kind == kindPanel {
-		_, err := panelCall(n, "/api/v2/core/settings/search")
+		_, err := panelCall(n, http.MethodPost, "/api/v2/core/settings/search")
 		return err
 	}
 	_, err := agentGet(n, "/api/v2/dashboard/current/node", 6*time.Second)

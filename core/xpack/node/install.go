@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -102,24 +101,29 @@ const startScript = "systemctl daemon-reload && systemctl enable 1panel-agent >/
 func installScript(masterURL, token string) string {
 	return fmt.Sprintf(`#!/bin/bash
 set -e
+umask 077
 MASTER="%s"
 TOKEN="%s"
 if [ "$(id -u)" != "0" ]; then echo "please run as root"; exit 1; fi
 if [ "$(uname -m)" != "%s" ]; then echo "architecture mismatch: master is %s, this machine is $(uname -m)"; exit 1; fi
 command -v curl >/dev/null || { echo "curl is required"; exit 1; }
 command -v systemctl >/dev/null || { echo "systemd is required"; exit 1; }
+TMP=$(mktemp /tmp/1panel-node-bundle.XXXXXX)
+trap 'rm -f "$TMP"' EXIT
 echo "[1/3] downloading agent..."
+mkdir -p /usr/local/bin
 curl -fsSLk "$MASTER/api/v2/core/nodejoin/agent?token=$TOKEN" -o %s.new
-chmod +x %s.new
+chmod 0755 %s.new
 echo "[2/3] fetching credentials..."
-curl -fsSLk "$MASTER/api/v2/core/nodejoin/bundle?token=$TOKEN&addr=${NODE_ADDR:-}" -o /tmp/1panel-node-bundle.sh
-bash /tmp/1panel-node-bundle.sh
-rm -f /tmp/1panel-node-bundle.sh
+curl -fsSLk "$MASTER/api/v2/core/nodejoin/bundle?token=$TOKEN&addr=${NODE_ADDR:-}" -o "$TMP"
+bash "$TMP"
+rm -f "$TMP"
 echo "[3/3] starting agent..."
 mv -f %s.new %s
+chmod 0755 %s
 %s
 echo "1Panel agent installed. The node will show online in the master shortly."
-`, masterURL, token, unameArch(), unameArch(), agentBinaryDest, agentBinaryDest, agentBinaryDest, agentBinaryDest, startScript)
+`, masterURL, token, unameArch(), unameArch(), agentBinaryDest, agentBinaryDest, agentBinaryDest, agentBinaryDest, agentBinaryDest, startScript)
 }
 
 type SSHInstall struct {
@@ -154,8 +158,12 @@ func runCommand(client *ssh.SSHClient, cmd, stdin string) (string, error) {
 func installViaSSH(id uint, req SSHInstall) {
 	global.LOG.Infof("install node %d via ssh: connecting %s@%s:%d", id, req.User, req.Addr, req.Port)
 	fail := func(err error) {
-		global.LOG.Errorf("install node %d via ssh failed: %v", id, err)
-		setStatus(id, statusFailed, err.Error())
+		msg := err.Error()
+		if req.Password != "" {
+			msg = strings.ReplaceAll(msg, req.Password, "***")
+		}
+		global.LOG.Errorf("install node %d via ssh failed: %s", id, msg)
+		setStatus(id, statusFailed, msg)
 	}
 	var n model.Node
 	if err := global.DB.First(&n, id).Error; err != nil {
@@ -178,7 +186,7 @@ func installViaSSH(id uint, req SSHInstall) {
 	if req.User != "root" && sudo == "" {
 		sudo = "sudo -S -p '' "
 		stdinHead = req.Password + "\n"
-		if out, err := runCommand(client, stdinHead+"sudo -S -p '' -v", ""); err != nil {
+		if out, err := runCommand(client, "sudo -S -p '' -v", stdinHead); err != nil {
 			fail(fmt.Errorf("sudo authentication failed for %s: %s", req.User, strings.TrimSpace(out)))
 			return
 		}
@@ -201,17 +209,23 @@ func installViaSSH(id uint, req SSHInstall) {
 		return
 	}
 	defer f.Close()
+	tmpUpload := "/tmp/1panel-agent.upload." + newSecret(12)
 	upload, err := client.Client.NewSession()
 	if err != nil {
 		fail(err)
 		return
 	}
-	// stdin carries the password line first, then the binary itself
-	upload.Stdin = io.MultiReader(strings.NewReader(stdinHead), f)
-	err = upload.Run(fmt.Sprintf("%smkdir -p /usr/local/bin && %stee %s.new >/dev/null && %schmod +x %s.new", sudo, sudo, agentBinaryDest, sudo, agentBinaryDest))
+	upload.Stdin = f
+	err = upload.Run(fmt.Sprintf("umask 077 && cat > %s", tmpUpload))
 	upload.Close()
 	if err != nil {
+		_, _ = runCommand(client, "rm -f "+tmpUpload, "")
 		fail(fmt.Errorf("upload agent failed: %w", err))
+		return
+	}
+	if out, err := runCommand(client, fmt.Sprintf("%sbash -c 'mkdir -p /usr/local/bin && mv -f %s %s.new && chmod 0755 %s.new'", sudo, tmpUpload, agentBinaryDest, agentBinaryDest), stdinHead); err != nil {
+		_, _ = runCommand(client, "rm -f "+tmpUpload, "")
+		fail(fmt.Errorf("stage agent failed: %s %w", strings.TrimSpace(out), err))
 		return
 	}
 	script, err := bundleScript(&n, req.Addr)
@@ -232,7 +246,7 @@ func installViaSSH(id uint, req SSHInstall) {
 		fail(fmt.Errorf("write node config failed: %s %w", strings.TrimSpace(string(out)), err))
 		return
 	}
-	if out, err := runCommand(client, stdinHead+fmt.Sprintf("%sbash -c 'mv -f %s.new %s && %s'", sudo, agentBinaryDest, agentBinaryDest, startScript), ""); err != nil {
+	if out, err := runCommand(client, fmt.Sprintf("%sbash -c 'mv -f %s.new %s && %s'", sudo, agentBinaryDest, agentBinaryDest, startScript), stdinHead); err != nil {
 		fail(fmt.Errorf("start agent failed: %s %w", strings.TrimSpace(out), err))
 		return
 	}

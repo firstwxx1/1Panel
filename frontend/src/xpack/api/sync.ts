@@ -6,7 +6,7 @@ export interface SyncTask {
     name: string;
     src: string;
     dsts: string[];
-    status: 'running' | 'success' | 'failed';
+    status: 'running' | 'success' | 'failed' | 'cancelled';
     progress: number;
     message: string;
     logs: string[];
@@ -29,5 +29,6 @@ export const syncCerts = (req: { src: string; dsts: string[]; ids: number[] }) =
     http.post<SyncTask>(`${base}/certs`, req);
 export const listSyncTasks = () => http.get<SyncTask[]>(`${base}/tasks`);
 export const deleteSyncTasks = (ids: string[]) => http.post(`${base}/tasks/del`, { ids });
+export const cancelSyncTask = (id: string) => http.post(`${base}/tasks/cancel`, { id });
 export const syncApps = (req: { src: string; dsts: string[]; name: string; stop: boolean }) =>
     http.post<SyncTask>(`${base}/apps`, req);

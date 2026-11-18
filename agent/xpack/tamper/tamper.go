@@ -4,16 +4,18 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/1Panel-dev/1Panel/agent/global"
 )
 
 // Web tamper protection: a baseline (hash of every file) is taken for each protected site and
@@ -23,6 +25,8 @@ const (
 	maxBackupSize = 10 << 20 // bigger files are hashed but not copied, so they cannot be restored
 	maxEvents     = 2000
 )
+
+var DefaultExcludes = []string{".git", "node_modules", "runtime", "cache", "*.log"}
 
 type SiteCfg struct {
 	Enabled    bool      `json:"enabled"`
@@ -65,10 +69,11 @@ func owner(info fs.FileInfo) (int, int) {
 }
 
 type Store struct {
-	dir string
-	mu  sync.Mutex
-	cfg Config
-	evs []Event
+	dir       string
+	mu        sync.Mutex
+	siteLocks map[string]*sync.Mutex
+	cfg       Config
+	evs       []Event
 	// "site|kind|path|hash" already reported, so detect-only mode does not repeat itself
 	seen map[string]bool
 	base map[string]map[string]entry
@@ -89,7 +94,13 @@ func Open(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	s := &Store{dir: dir, cfg: Config{Interval: 60, Sites: map[string]SiteCfg{}}, seen: map[string]bool{}, base: map[string]map[string]entry{}}
+	s := &Store{
+		dir:       dir,
+		siteLocks: map[string]*sync.Mutex{},
+		cfg:       Config{Interval: 60, Sites: map[string]SiteCfg{}},
+		seen:      map[string]bool{},
+		base:      map[string]map[string]entry{},
+	}
 	if b, err := os.ReadFile(path.Join(dir, "config.json")); err == nil {
 		_ = json.Unmarshal(b, &s.cfg)
 	}
@@ -103,13 +114,49 @@ func Open(dir string) (*Store, error) {
 		_ = json.Unmarshal(b, &s.evs)
 	}
 	for _, e := range s.evs {
-		s.seen[seenKey(e)] = true
+		if e.Action == "none" || e.Action == "restore_failed" {
+			s.seen[seenKey(e)] = true
+		}
 		if e.ID > s.next {
 			s.next = e.ID
 		}
 	}
 	stores[dir] = s
 	return s, nil
+}
+
+// DefaultStore returns the active tamper store if already opened or present on disk.
+func DefaultStore() (*Store, error) {
+	if global.Dir.DataDir == "" {
+		return nil, errors.New("data dir not initialized")
+	}
+	dir := path.Join(global.Dir.DataDir, "tamper")
+	storeMu.Lock()
+	if s, ok := stores[dir]; ok {
+		storeMu.Unlock()
+		return s, nil
+	}
+	storeMu.Unlock()
+
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return nil, nil
+	}
+	return Open(dir)
+}
+
+func (s *Store) lockSite(alias string) func() {
+	s.mu.Lock()
+	if s.siteLocks == nil {
+		s.siteLocks = map[string]*sync.Mutex{}
+	}
+	m, ok := s.siteLocks[alias]
+	if !ok {
+		m = &sync.Mutex{}
+		s.siteLocks[alias] = m
+	}
+	s.mu.Unlock()
+	m.Lock()
+	return m.Unlock
 }
 
 func seenKey(e Event) string { return e.Site + "|" + e.Kind + "|" + e.Path + "|" + e.Hash }
@@ -120,14 +167,34 @@ func (s *Store) Config() Config {
 	c := s.cfg
 	c.Sites = map[string]SiteCfg{}
 	for k, v := range s.cfg.Sites {
-		c.Sites[k] = v
+		cp := v
+		if v.Excludes != nil {
+			cp.Excludes = append([]string(nil), v.Excludes...)
+		}
+		c.Sites[k] = cp
 	}
 	return c
 }
 
 func (s *Store) saveCfgLocked() error {
 	b, _ := json.MarshalIndent(s.cfg, "", "  ")
-	return os.WriteFile(path.Join(s.dir, "config.json"), b, 0o600)
+	tmp := path.Join(s.dir, "config.json.tmp")
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path.Join(s.dir, "config.json"))
+}
+
+func (s *Store) saveEventsLocked() {
+	if len(s.evs) == 0 {
+		_ = os.Remove(path.Join(s.dir, "events.json"))
+		return
+	}
+	b, _ := json.Marshal(s.evs)
+	tmp := path.Join(s.dir, "events.json.tmp")
+	if os.WriteFile(tmp, b, 0o600) == nil {
+		_ = os.Rename(tmp, path.Join(s.dir, "events.json"))
+	}
 }
 
 func (s *Store) SetGlobal(enabled bool, interval int) error {
@@ -144,7 +211,7 @@ func (s *Store) SetGlobal(enabled bool, interval int) error {
 func (s *Store) SetSite(alias string, enabled, restore bool, excludes []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c := s.cfg.Sites[alias]
+	c, exists := s.cfg.Sites[alias]
 	c.Enabled, c.Restore = enabled, restore
 	var clean []string
 	for _, e := range excludes {
@@ -152,9 +219,54 @@ func (s *Store) SetSite(alias string, enabled, restore bool, excludes []string) 
 			clean = append(clean, e)
 		}
 	}
+	if !exists && len(clean) == 0 {
+		clean = append([]string(nil), DefaultExcludes...)
+	}
 	c.Excludes = clean
 	s.cfg.Sites[alias] = c
 	return s.saveCfgLocked()
+}
+
+// RemoveSite removes all tamper state, baselines, backups, and quarantined files for a deleted website.
+func (s *Store) RemoveSite(alias string) error {
+	if alias == "" {
+		return nil
+	}
+	unlock := s.lockSite(alias)
+	defer unlock()
+
+	s.mu.Lock()
+	delete(s.cfg.Sites, alias)
+	delete(s.base, alias)
+	prefix := alias + "|"
+	for k := range s.seen {
+		if strings.HasPrefix(k, prefix) {
+			delete(s.seen, k)
+		}
+	}
+	kept := s.evs[:0]
+	evChanged := false
+	for _, e := range s.evs {
+		if e.Site == alias {
+			evChanged = true
+			continue
+		}
+		kept = append(kept, e)
+	}
+	s.evs = kept
+	if evChanged {
+		s.saveEventsLocked()
+	}
+	err := s.saveCfgLocked()
+	bfile := s.baselinePath(alias)
+	bdir := s.backupDir(alias)
+	qdir := s.quarantineDir(alias)
+	s.mu.Unlock()
+
+	_ = os.Remove(bfile)
+	_ = os.RemoveAll(bdir)
+	_ = os.RemoveAll(qdir)
+	return err
 }
 
 func (s *Store) Events(site string, page, size int) ([]Event, int) {
@@ -199,29 +311,34 @@ func (s *Store) Since(id int64) ([]Event, int64) {
 
 func (s *Store) ClearEvents() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.evs = nil
+	s.seen = map[string]bool{}
 	_ = os.Remove(path.Join(s.dir, "events.json"))
+	qdir := path.Join(s.dir, "quarantine")
+	s.mu.Unlock()
+	_ = os.RemoveAll(qdir)
 }
 
 func (s *Store) addEventsLocked(evs []Event) {
 	for i := range evs {
 		s.next++
 		evs[i].ID = s.next
-		s.seen[seenKey(evs[i])] = true
+		if evs[i].Action == "none" || evs[i].Action == "restore_failed" {
+			s.seen[seenKey(evs[i])] = true
+		}
 	}
 	s.evs = append(s.evs, evs...)
 	if len(s.evs) > maxEvents {
 		s.evs = s.evs[len(s.evs)-maxEvents:]
 	}
-	b, _ := json.Marshal(s.evs)
-	_ = os.WriteFile(path.Join(s.dir, "events.json"), b, 0o600)
+	s.saveEventsLocked()
 }
 
 func (s *Store) baselinePath(alias string) string {
 	return path.Join(s.dir, "baseline", alias+".json")
 }
-func (s *Store) backupDir(alias string) string { return path.Join(s.dir, "backup", alias) }
+func (s *Store) backupDir(alias string) string     { return path.Join(s.dir, "backup", alias) }
+func (s *Store) quarantineDir(alias string) string { return path.Join(s.dir, "quarantine", alias) }
 
 func (s *Store) loadBaselineLocked(alias string) map[string]entry {
 	if m, ok := s.base[alias]; ok {
@@ -241,7 +358,12 @@ func (s *Store) saveBaselineLocked(alias string, m map[string]entry) {
 	s.base[alias] = m
 	_ = os.MkdirAll(path.Dir(s.baselinePath(alias)), 0o700)
 	b, _ := json.Marshal(m)
-	_ = os.WriteFile(s.baselinePath(alias), b, 0o600)
+	tmp := s.baselinePath(alias) + ".tmp"
+	if os.WriteFile(tmp, b, 0o600) == nil {
+		_ = os.Rename(tmp, s.baselinePath(alias))
+	} else {
+		_ = os.WriteFile(s.baselinePath(alias), b, 0o600)
+	}
 }
 
 func excluded(rel string, patterns []string) bool {
@@ -264,12 +386,22 @@ func excluded(rel string, patterns []string) bool {
 	return false
 }
 
-func hashFile(p string) (string, error) {
-	f, err := os.Open(p)
+func hashRootFile(r *os.Root, rel string) (string, error) {
+	info, err := r.Lstat(rel)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("not a regular file: %s", rel)
+	}
+	f, err := r.OpenFile(rel, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return "", fmt.Errorf("not a regular file: %s", rel)
+	}
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
@@ -277,84 +409,243 @@ func hashFile(p string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func copyFile(src, dst string, mode os.FileMode) error {
-	if err := os.MkdirAll(path.Dir(dst), 0o755); err != nil {
+// copyFromRoot copies a regular file from inside r to a private host destination, bounded by maxBytes.
+func copyFromRoot(r *os.Root, rel, dst string, mode os.FileMode, maxBytes int64) error {
+	if err := os.MkdirAll(path.Dir(dst), 0o700); err != nil {
 		return err
 	}
-	in, err := os.Open(src)
+	in, err := r.OpenFile(rel, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
+	st, err := in.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		return fmt.Errorf("not a regular file: %s", rel)
+	}
+	if maxBytes > 0 && st.Size() > maxBytes {
+		return fmt.Errorf("file exceeds max size: %d", st.Size())
+	}
 	tmp := dst + ".tamper-tmp"
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
+	var src io.Reader = in
+	if maxBytes > 0 {
+		src = io.LimitReader(in, maxBytes+1)
+	}
+	n, err := io.Copy(out, src)
+	if err != nil {
 		out.Close()
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
+	if maxBytes > 0 && n > maxBytes {
+		out.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("file exceeds max size")
+	}
 	if err := out.Close(); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	return os.Rename(tmp, dst)
 }
 
-// walk lists regular files under root as site-relative paths.
-func walk(root string, excludes []string, fn func(rel string, info fs.FileInfo, full string)) {
-	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+func mkdirAllRoot(r *os.Root, relDir string, perm os.FileMode) error {
+	relDir = strings.Trim(path.Clean(relDir), "/")
+	if relDir == "" || relDir == "." {
+		return nil
+	}
+	parts := strings.Split(relDir, "/")
+	cur := ""
+	for _, p := range parts {
+		if p == "" || p == "." {
+			continue
+		}
+		if cur == "" {
+			cur = p
+		} else {
+			cur = cur + "/" + p
+		}
+		st, err := r.Lstat(cur)
+		if err == nil {
+			if !st.IsDir() {
+				if err := r.Remove(cur); err != nil {
+					return err
+				}
+				if err := r.Mkdir(cur, perm); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if err := r.Mkdir(cur, perm); err != nil && !os.IsExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// restoreToRoot copies a clean backup file back into website root via r without following symlinks
+// or allowing TOCTOU on Chmod / Chown.
+func restoreToRoot(r *os.Root, bakPath, rel string, old entry) (os.FileInfo, error) {
+	in, err := os.Open(bakPath)
+	if err != nil {
+		return nil, err
+	}
+	defer in.Close()
+
+	if err := mkdirAllRoot(r, path.Dir(rel), 0o755); err != nil {
+		return nil, err
+	}
+	if st, err := r.Lstat(rel); err == nil && st.IsDir() {
+		if err := r.RemoveAll(rel); err != nil {
+			return nil, err
+		}
+	}
+
+	tmpRel := rel + ".tamper-tmp"
+	_ = r.Remove(tmpRel)
+	mode := old.Mode
+	if mode == 0 {
+		mode = 0o644
+	}
+	out, err := r.OpenFile(tmpRel, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, mode)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		_ = r.Remove(tmpRel)
+		return nil, err
+	}
+	_ = out.Chmod(mode)
+	if lst, err := r.Lstat(tmpRel); err != nil || !lst.Mode().IsRegular() {
+		out.Close()
+		_ = r.Remove(tmpRel)
+		return nil, errors.New("unexpected non-regular target during restore")
+	}
+	if old.UID >= 0 && old.GID >= 0 {
+		_ = out.Chown(old.UID, old.GID)
+	}
+	if err := out.Close(); err != nil {
+		_ = r.Remove(tmpRel)
+		return nil, err
+	}
+	if err := r.Rename(tmpRel, rel); err != nil {
+		_ = r.Remove(tmpRel)
+		return nil, err
+	}
+	_ = r.Chmod(rel, mode)
+	return r.Lstat(rel)
+}
+
+// walk traverses r safely via r.FS() (never escaping root), invoking onFile for regular files
+// and onSymlink for unexpected symlinks.
+func walk(r *os.Root, excludes []string, onFile func(rel string, info fs.FileInfo), onSymlink func(rel string)) {
+	_ = fs.WalkDir(r.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		rel, _ := filepath.Rel(root, p)
-		rel = filepath.ToSlash(rel)
-		if rel == "." {
+		if rel == "." || strings.HasSuffix(rel, ".tamper-tmp") {
 			return nil
 		}
 		if excluded(rel, excludes) {
 			if d.IsDir() {
-				return filepath.SkipDir
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			if onSymlink != nil {
+				onSymlink(rel)
 			}
 			return nil
 		}
 		if d.IsDir() || !d.Type().IsRegular() {
 			return nil
 		}
-		if info, err := d.Info(); err == nil {
-			fn(rel, info, p)
+		if info, err := r.Lstat(rel); err == nil && info.Mode().IsRegular() {
+			onFile(rel, info)
 		}
 		return nil
 	})
 }
 
-// Rebuild takes a fresh baseline (and backup copies) of the site root.
+// Rebuild takes a fresh baseline (and backup copies) of the site root without holding s.mu during I/O.
 func (s *Store) Rebuild(alias, root string) (int, error) {
-	if st, err := os.Stat(root); err != nil || !st.IsDir() {
+	unlock := s.lockSite(alias)
+	defer unlock()
+
+	r, err := os.OpenRoot(root)
+	if err != nil {
 		return 0, fmt.Errorf("site directory not found: %s", root)
 	}
+	defer r.Close()
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	cfg := s.cfg.Sites[alias]
-	m := map[string]entry{}
+	cfg, exists := s.cfg.Sites[alias]
+	if !exists && len(cfg.Excludes) == 0 {
+		cfg.Excludes = append([]string(nil), DefaultExcludes...)
+	}
+	excludes := append([]string(nil), cfg.Excludes...)
 	bdir := s.backupDir(alias)
-	_ = os.RemoveAll(bdir)
-	walk(root, cfg.Excludes, func(rel string, info fs.FileInfo, full string) {
-		h, err := hashFile(full)
+	s.mu.Unlock()
+
+	stageDir := bdir + ".rebuilding"
+	_ = os.RemoveAll(stageDir)
+	m := map[string]entry{}
+	walk(r, excludes, func(rel string, info fs.FileInfo) {
+		h, err := hashRootFile(r, rel)
 		if err != nil {
 			return
 		}
 		u, g := owner(info)
 		m[rel] = entry{Hash: h, Size: info.Size(), MT: info.ModTime().UnixNano(), Mode: info.Mode().Perm(), UID: u, GID: g}
 		if info.Size() <= maxBackupSize {
-			_ = copyFile(full, path.Join(bdir, rel), 0o600)
+			_ = copyFromRoot(r, rel, path.Join(stageDir, rel), 0o600, maxBackupSize)
 		}
-	})
+	}, nil)
+
+	_ = os.RemoveAll(bdir)
+	if _, err := os.Stat(stageDir); err == nil {
+		_ = os.MkdirAll(path.Dir(bdir), 0o700)
+		_ = os.Rename(stageDir, bdir)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	curCfg, curExists := s.cfg.Sites[alias]
+	if !curExists && len(curCfg.Excludes) == 0 {
+		curCfg.Excludes = excludes
+	}
+	curCfg.BaselineAt, curCfg.Files = time.Now(), len(m)
+	s.cfg.Sites[alias] = curCfg
 	s.saveBaselineLocked(alias, m)
-	cfg.BaselineAt, cfg.Files = time.Now(), len(m)
-	s.cfg.Sites[alias] = cfg
+
+	// Clear seen entries and pending unresolved events for this site on baseline rebuild.
+	prefix := alias + "|"
+	for k := range s.seen {
+		if strings.HasPrefix(k, prefix) {
+			delete(s.seen, k)
+		}
+	}
+	kept := s.evs[:0]
+	evChanged := false
+	for _, e := range s.evs {
+		if e.Site == alias && (e.Action == "none" || e.Action == "restore_failed") {
+			evChanged = true
+			continue
+		}
+		kept = append(kept, e)
+	}
+	s.evs = kept
+	if evChanged {
+		s.saveEventsLocked()
+	}
+
 	return len(m), s.saveCfgLocked()
 }
 
@@ -366,29 +657,44 @@ func (s *Store) HasBaseline(alias string) bool {
 
 // Scan compares one site against its baseline; with restore on it also repairs the differences.
 func (s *Store) Scan(alias, root string) []Event {
+	unlock := s.lockSite(alias)
+	defer unlock()
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	cfg := s.cfg.Sites[alias]
 	if !cfg.Enabled { // a disabled site must never be touched, not even by a manual scan
+		s.mu.Unlock()
 		return nil
 	}
-	base := s.loadBaselineLocked(alias)
-	if base == nil {
+	origBase := s.loadBaselineLocked(alias)
+	if origBase == nil {
+		s.mu.Unlock()
 		return nil
 	}
-	if st, err := os.Stat(root); err != nil || !st.IsDir() {
+	base := make(map[string]entry, len(origBase))
+	for k, v := range origBase {
+		base[k] = v
+	}
+	excludes := append([]string(nil), cfg.Excludes...)
+	restoreOn := cfg.Restore
+	s.mu.Unlock()
+
+	r, err := os.OpenRoot(root)
+	if err != nil {
 		return nil
 	}
+	defer r.Close()
+
 	now := time.Now()
 	var found []Event
 	current := map[string]bool{}
-	walk(root, cfg.Excludes, func(rel string, info fs.FileInfo, full string) {
+	walk(r, excludes, func(rel string, info fs.FileInfo) {
 		current[rel] = true
 		old, ok := base[rel]
 		if ok && old.Size == info.Size() && old.MT == info.ModTime().UnixNano() {
 			return
 		}
-		h, err := hashFile(full)
+		h, err := hashRootFile(r, rel)
 		if err != nil {
 			return
 		}
@@ -401,20 +707,53 @@ func (s *Store) Scan(alias, root string) []Event {
 			old.MT = info.ModTime().UnixNano()
 			base[rel] = old
 		}
+	}, func(rel string) {
+		if _, inBase := base[rel]; inBase {
+			current[rel] = true
+			found = append(found, Event{Time: now, Site: alias, Kind: "modified", Path: rel, Hash: "symlink"})
+		} else {
+			found = append(found, Event{Time: now, Site: alias, Kind: "added", Path: rel, Hash: "symlink"})
+		}
 	})
+
 	for rel, old := range base {
 		if !current[rel] {
 			found = append(found, Event{Time: now, Site: alias, Kind: "deleted", Path: rel, Hash: old.Hash})
 		}
 	}
-	var out []Event
+
+	stillTampered := map[string]bool{}
 	for i := range found {
-		e := found[i]
-		e.Action = "none"
-		if cfg.Restore {
-			e.Action = s.repairLocked(alias, root, base, e)
+		found[i].Action = "none"
+		if restoreOn {
+			found[i].Action = s.repairLocked(alias, r, base, found[i])
 		}
-		// repaired changes are always worth logging; unrepaired ones only once
+		if found[i].Action == "none" || found[i].Action == "restore_failed" {
+			stillTampered[found[i].Path] = true
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if curCfg, ok := s.cfg.Sites[alias]; !ok || !curCfg.Enabled {
+		return nil
+	}
+	s.base[alias] = base
+
+	// Clear s.seen entries for (alias, path) as soon as a path matches baseline again.
+	prefix := alias + "|"
+	for k := range s.seen {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		parts := strings.SplitN(k, "|", 4)
+		if len(parts) >= 3 && !stillTampered[parts[2]] {
+			delete(s.seen, k)
+		}
+	}
+
+	var out []Event
+	for _, e := range found {
 		if e.Action == "none" || e.Action == "restore_failed" {
 			if s.seen[seenKey(e)] {
 				continue
@@ -424,7 +763,6 @@ func (s *Store) Scan(alias, root string) []Event {
 	}
 	if len(out) > 0 {
 		s.addEventsLocked(out)
-		// out is a copy of the slice header only; IDs were assigned in place
 		for i := range out {
 			out[i] = s.evs[len(s.evs)-len(out)+i]
 		}
@@ -432,30 +770,44 @@ func (s *Store) Scan(alias, root string) []Event {
 	return out
 }
 
-func (s *Store) repairLocked(alias, root string, base map[string]entry, e Event) string {
-	full := path.Join(root, e.Path)
+func (s *Store) repairLocked(alias string, r *os.Root, base map[string]entry, e Event) string {
 	switch e.Kind {
 	case "added":
-		q := path.Join(s.dir, "quarantine", alias, now14(), e.Path)
-		if err := copyFile(full, q, 0o600); err != nil {
+		st, err := r.Lstat(e.Path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return "quarantined"
+			}
 			return "restore_failed"
 		}
-		if err := os.Remove(full); err != nil {
+		if st.Mode()&os.ModeSymlink != 0 {
+			if err := r.Remove(e.Path); err != nil {
+				return "restore_failed"
+			}
+			return "quarantined"
+		}
+		if st.Mode().IsRegular() && st.Size() <= maxBackupSize {
+			q := path.Join(s.quarantineDir(alias), now14(), e.Path)
+			if err := copyFromRoot(r, e.Path, q, 0o600, maxBackupSize); err != nil {
+				// If file grew past maxBackupSize while copying, proceed with removal anyway.
+				if curSt, stErr := r.Lstat(e.Path); stErr != nil || curSt.Size() <= maxBackupSize {
+					return "restore_failed"
+				}
+			}
+		}
+		if err := r.Remove(e.Path); err != nil {
 			return "restore_failed"
 		}
 		return "quarantined"
 	default:
 		old := base[e.Path]
 		bak := path.Join(s.backupDir(alias), e.Path)
-		if err := copyFile(bak, full, old.Mode); err != nil {
+		info, err := restoreToRoot(r, bak, e.Path, old)
+		if err != nil {
 			return "restore_failed"
 		}
-		_ = os.Chown(full, old.UID, old.GID)
-		_ = os.Chmod(full, old.Mode)
-		if info, err := os.Stat(full); err == nil {
-			old.MT = info.ModTime().UnixNano()
-			base[e.Path] = old
-		}
+		old.MT = info.ModTime().UnixNano()
+		base[e.Path] = old
 		return "restored"
 	}
 }

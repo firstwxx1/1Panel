@@ -2,7 +2,6 @@ package waf
 
 import (
 	"encoding/csv"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -45,24 +44,53 @@ func ListBlocks(s *Store, q BlockQuery) (*BlockPage, error) {
 	if q.Page < 1 {
 		q.Page = 1
 	}
-	if q.Size < 1 || q.Size > 200 {
+	if q.Size < 1 {
 		q.Size = 20
 	}
-	active := map[string]bool{}
-	if ips, err := s.EngineBlockedIPs(); err == nil {
-		for _, ip := range ips {
-			active[ip] = true
-		}
+	if q.Size > 10000 {
+		q.Size = 10000
 	}
 
 	d := newDBs(s.OpenrestyPath)
 	defer d.close()
 	bdb, err := d.get("waf", "block_ips")
 	if err != nil {
+		if isMissingDB(err) {
+			return res, nil
+		}
 		return res, err
 	}
-	rows, err := bdb.Query(`SELECT id, ip_id, attack_log_id, COALESCE(create_date,''), blocking_time FROM block_ips ORDER BY id DESC LIMIT 2000`)
+
+	where := "1=1"
+	var args []interface{}
+	if needle := strings.TrimSpace(q.IP); needle != "" {
+		matchIDs, err := d.findIDs("waf", "ips", "ips", needle, true)
+		if err != nil {
+			return res, err
+		}
+		if len(matchIDs) == 0 {
+			return res, nil
+		}
+		where = "ip_id IN (" + placeholders(len(matchIDs)) + ")"
+		args = append(args, matchIDs...)
+	}
+
+	if err := bdb.QueryRow("SELECT COUNT(*) FROM block_ips WHERE "+where, args...).Scan(&res.Total); err != nil {
+		if isMissingDB(err) {
+			return res, nil
+		}
+		return res, err
+	}
+	if res.Total == 0 {
+		return res, nil
+	}
+
+	queryArgs := append(append([]interface{}{}, args...), q.Size, (q.Page-1)*q.Size)
+	rows, err := bdb.Query(`SELECT id, ip_id, attack_log_id, COALESCE(create_date,''), blocking_time FROM block_ips WHERE `+where+` ORDER BY id DESC LIMIT ? OFFSET ?`, queryArgs...)
 	if err != nil {
+		if isMissingDB(err) {
+			return res, nil
+		}
 		return res, err
 	}
 	type brow struct {
@@ -79,6 +107,16 @@ func ListBlocks(s *Store, q BlockQuery) (*BlockPage, error) {
 		list = append(list, b)
 	}
 	rows.Close()
+	if len(list) == 0 {
+		return res, nil
+	}
+
+	active := map[string]bool{}
+	if ips, err := s.EngineBlockedIPs(); err == nil {
+		for _, ip := range ips {
+			active[ip] = true
+		}
+	}
 
 	ipIDs, logIDs := map[int]bool{}, map[int]bool{}
 	for _, b := range list {
@@ -91,15 +129,16 @@ func ListBlocks(s *Store, q BlockQuery) (*BlockPage, error) {
 	}
 	ruleOf, locOf := map[int]int{}, map[int]int{}
 	if adb, err := d.get("waf", "attack_logs"); err == nil && len(logIDs) > 0 {
-		holders, a := idList(logIDs)
-		if arows, err := adb.Query("SELECT id, rule_type_id, ip_location_id FROM attack_logs WHERE id IN ("+holders+")", a...); err == nil {
-			for arows.Next() {
-				var id, rt, loc int
-				if arows.Scan(&id, &rt, &loc) == nil {
-					ruleOf[id], locOf[id] = rt, loc
+		for _, chunk := range idChunks(logIDs) {
+			if arows, err := adb.Query("SELECT id, rule_type_id, ip_location_id FROM attack_logs WHERE id IN ("+placeholders(len(chunk))+")", chunk...); err == nil {
+				for arows.Next() {
+					var id, rt, loc int
+					if arows.Scan(&id, &rt, &loc) == nil {
+						ruleOf[id], locOf[id] = rt, loc
+					}
 				}
+				arows.Close()
 			}
-			arows.Close()
 		}
 	}
 	rtIDs, locIDs := map[int]bool{}, map[int]bool{}
@@ -113,15 +152,11 @@ func ListBlocks(s *Store, q BlockQuery) (*BlockPage, error) {
 	locs, _ := d.locations(locIDs)
 
 	now := time.Now()
-	needle := strings.TrimSpace(q.IP)
 	for _, b := range list {
 		item := BlockItem{
 			ID: b.id, IP: ips[b.ipID], Rule: types[ruleOf[b.logID]], BlockedAt: b.at, BlockingSec: b.sec,
 			Country: locs[locOf[b.logID]].Country, Province: locs[locOf[b.logID]].Province,
 			Status: BlockStatusReleased,
-		}
-		if needle != "" && !strings.Contains(item.IP, needle) {
-			continue
 		}
 		if t, err := time.ParseInLocation("2006-01-02 15:04:05", b.at, time.Local); err == nil {
 			left := b.sec - int(now.Sub(t).Seconds())
@@ -131,16 +166,6 @@ func ListBlocks(s *Store, q BlockQuery) (*BlockPage, error) {
 		}
 		res.Items = append(res.Items, item)
 	}
-	res.Total = len(res.Items)
-	start := (q.Page - 1) * q.Size
-	if start > len(res.Items) {
-		start = len(res.Items)
-	}
-	end := start + q.Size
-	if end > len(res.Items) {
-		end = len(res.Items)
-	}
-	res.Items = res.Items[start:end]
 	return res, nil
 }
 
@@ -149,32 +174,30 @@ func RemoveBlocks(s *Store, ips []string) error {
 	if len(ips) == 0 {
 		return nil
 	}
-	var failures []string
-	for _, ip := range ips {
-		if err := s.EngineUnblock(ip); err != nil {
-			failures = append(failures, ip)
-		}
-	}
-	if len(failures) > 0 {
-		return fmt.Errorf("failed to unblock: %s", strings.Join(failures, ","))
+	if err := s.EngineUnblockBatch(ips); err != nil {
+		return err
 	}
 	return deleteBlockRows(s, ips)
 }
 
 // ClearBlocks releases every blocked IP and empties the block table.
 func ClearBlocks(s *Store) error {
-	if ips, err := s.EngineBlockedIPs(); err == nil {
-		for _, ip := range ips {
-			_ = s.EngineUnblock(ip)
-		}
+	if ips, err := s.EngineBlockedIPs(); err == nil && len(ips) > 0 {
+		_ = s.EngineUnblockBatch(ips)
 	}
 	db, err := openDBRW(s.OpenrestyPath, "waf", "block_ips")
 	if err != nil {
+		if isMissingDB(err) {
+			return nil
+		}
 		return err
 	}
 	defer db.Close()
-	_, err = db.Exec("DELETE FROM block_ips")
-	return err
+	if _, err = db.Exec("DELETE FROM block_ips"); err != nil && !isMissingDB(err) {
+		return err
+	}
+	_, _ = db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	return nil
 }
 
 // deleteBlockRows removes the block records of the given IPs.
@@ -183,36 +206,59 @@ func deleteBlockRows(s *Store, ips []string) error {
 	defer d.close()
 	ipdb, err := d.get("waf", "ips")
 	if err != nil {
-		return err
-	}
-	holders := strings.TrimSuffix(strings.Repeat("?,", len(ips)), ",")
-	args := make([]interface{}, 0, len(ips))
-	for _, ip := range ips {
-		args = append(args, ip)
-	}
-	rows, err := ipdb.Query("SELECT id FROM ips WHERE value IN ("+holders+")", args...)
-	if err != nil {
+		if isMissingDB(err) {
+			return nil
+		}
 		return err
 	}
 	var ids []interface{}
-	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err == nil {
-			ids = append(ids, id)
+	for i := 0; i < len(ips); i += maxInBatch {
+		end := i + maxInBatch
+		if end > len(ips) {
+			end = len(ips)
 		}
+		chunk := ips[i:end]
+		args := make([]interface{}, 0, len(chunk))
+		for _, ip := range chunk {
+			args = append(args, ip)
+		}
+		rows, err := ipdb.Query("SELECT id FROM ips WHERE value IN ("+placeholders(len(args))+")", args...)
+		if err != nil {
+			if isMissingDB(err) {
+				return nil
+			}
+			return err
+		}
+		for rows.Next() {
+			var id int
+			if err := rows.Scan(&id); err == nil {
+				ids = append(ids, id)
+			}
+		}
+		rows.Close()
 	}
-	rows.Close()
 	if len(ids) == 0 {
 		return nil
 	}
 	db, err := openDBRW(s.OpenrestyPath, "waf", "block_ips")
 	if err != nil {
+		if isMissingDB(err) {
+			return nil
+		}
 		return err
 	}
 	defer db.Close()
-	ph := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-	_, err = db.Exec("DELETE FROM block_ips WHERE ip_id IN ("+ph+")", ids...)
-	return err
+	for i := 0; i < len(ids); i += maxInBatch {
+		end := i + maxInBatch
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[i:end]
+		if _, err = db.Exec("DELETE FROM block_ips WHERE ip_id IN ("+placeholders(len(chunk))+")", chunk...); err != nil && !isMissingDB(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 // ExportBlocks renders the current view as CSV.

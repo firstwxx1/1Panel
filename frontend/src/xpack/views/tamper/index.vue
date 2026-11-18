@@ -1,14 +1,23 @@
 <template>
     <div>
+        <NodeTargetBar v-model="targetNode" @change="onNodeChange" />
         <el-tabs v-model="active" type="card" class="mb-3" @tab-change="onTab">
             <el-tab-pane v-for="k in keys" :key="k" :label="$t('pro.tamper.' + k)" :name="k" />
         </el-tabs>
 
         <div v-if="active === 'sites'">
+            <el-alert
+                v-if="!enabled && hasProtectedSite"
+                type="warning"
+                show-icon
+                :closable="false"
+                class="mb-3"
+                :title="$t('pro.tamper.globalOffWarn')"
+            />
             <el-card shadow="never" class="mb-3">
                 <div class="desc">{{ $t('pro.tamper.desc') }}</div>
                 <div class="bar">
-                    <el-switch v-model="enabled" :active-text="$t('pro.tamper.globalSwitch')" />
+                    <el-switch v-model="enabled" :active-text="$t('pro.tamper.globalSwitch')" @change="saveGlobal" />
                     <span>{{ $t('pro.tamper.interval') }}</span>
                     <el-input-number v-model="interval" :min="10" :max="3600" size="small" />
                     <el-button type="primary" size="small" @click="saveGlobal">{{ $t('pro.tamper.saveGlobal') }}</el-button>
@@ -105,8 +114,10 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { GlobalStore } from '@/store';
+import NodeTargetBar from '@/xpack/components/NodeTargetBar.vue';
 import {
     TamperEvent,
     TamperSite,
@@ -121,6 +132,8 @@ import {
 import i18n from '@/lang';
 
 const t = i18n.global.t;
+const globalStore = GlobalStore();
+const targetNode = ref(globalStore.currentNode || 'local');
 const keys = ['sites', 'events'];
 const active = ref('sites');
 const loading = ref(false);
@@ -136,13 +149,17 @@ const exVisible = ref(false);
 const exText = ref('');
 let exRow: TamperSite | null = null;
 
+const hasProtectedSite = computed(() => sites.value.some((s) => s.enabled));
+
 const load = async () => {
     loading.value = true;
     try {
-        const res = (await tamperGetSettings()).data;
+        const res = (await tamperGetSettings(targetNode.value)).data;
         enabled.value = res.enabled;
         interval.value = res.interval;
         sites.value = res.sites || [];
+    } catch {
+        sites.value = [];
     } finally {
         loading.value = false;
     }
@@ -151,22 +168,36 @@ const loadEvents = async (p: number) => {
     page.value = p || 1;
     loading.value = true;
     try {
-        const res = (await tamperEvents({ site: evSite.value || '', page: page.value, pageSize: 20 })).data;
+        const res = (await tamperEvents({ site: evSite.value || '', page: page.value, pageSize: 20 }, targetNode.value)).data;
         events.value = res.items || [];
         total.value = res.total;
+    } catch {
+        events.value = [];
+        total.value = 0;
     } finally {
         loading.value = false;
     }
 };
+const onNodeChange = () => {
+    evSite.value = '';
+    page.value = 1;
+    load();
+    if (active.value === 'events') {
+        loadEvents(1);
+    }
+};
 const onTab = (k: any) => (k === 'events' ? loadEvents(1) : load());
 const saveGlobal = async () => {
-    await tamperSaveGlobal({ enabled: enabled.value, interval: interval.value });
+    await tamperSaveGlobal({ enabled: enabled.value, interval: interval.value }, targetNode.value);
     ElMessage.success(t('pro.tamper.saved'));
 };
 const saveSite = async (row: TamperSite) => {
     busy.value = row.alias;
     try {
-        await tamperSaveSite({ alias: row.alias, enabled: row.enabled, restore: row.restore, excludes: row.excludes });
+        await tamperSaveSite(
+            { alias: row.alias, enabled: row.enabled, restore: row.restore, excludes: row.excludes },
+            targetNode.value,
+        );
         await load();
     } catch {
         await load();
@@ -187,18 +218,18 @@ const saveExcludes = async () => {
 };
 const rebuild = async (row: TamperSite) => {
     await ElMessageBox.confirm(t('pro.tamper.rebuildConfirm'), t('pro.tamper.rebuild'), { type: 'warning' });
-    const res = await tamperRebuild(row.alias);
+    const res = await tamperRebuild(row.alias, targetNode.value);
     ElMessage.success(t('pro.tamper.rebuilt', { n: res.data.files }));
     load();
 };
 const scan = async (row: TamperSite) => {
-    const res = await tamperScan(row.alias);
+    const res = await tamperScan(row.alias, targetNode.value);
     ElMessage.success(t('pro.tamper.scanResult', { n: res.data.found }));
     load();
 };
 const clearEvents = async () => {
     await ElMessageBox.confirm(t('pro.tamper.clear') + '?', { type: 'warning' });
-    await tamperClearEvents();
+    await tamperClearEvents(targetNode.value);
     loadEvents(1);
 };
 

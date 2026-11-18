@@ -3,14 +3,18 @@
 package router
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path"
+	"regexp"
 	"strings"
 	"sync"
 
 	"github.com/1Panel-dev/1Panel/agent/app/api/v2/helper"
 	"github.com/1Panel-dev/1Panel/agent/app/repo"
 	"github.com/1Panel-dev/1Panel/agent/app/service"
+	"github.com/1Panel-dev/1Panel/agent/constant"
 	"github.com/1Panel-dev/1Panel/agent/global"
 	"github.com/1Panel-dev/1Panel/agent/xpack/monitor"
 	"github.com/1Panel-dev/1Panel/agent/xpack/waf"
@@ -38,6 +42,18 @@ func monitorSites() []monitor.Site {
 	return res
 }
 
+func monitorGeoPaths() []string {
+	app, err := repo.NewIAppRepo().GetFirst(repo.NewIAppRepo().WithKey(constant.AppOpenresty))
+	if err != nil || app.ID == 0 {
+		return nil
+	}
+	install, err := repo.NewIAppInstallRepo().GetFirst(repo.NewIAppInstallRepo().WithAppId(app.ID))
+	if err != nil || install.ID == 0 {
+		return nil
+	}
+	return []string{path.Join(install.GetPath(), "1pwaf", "data", "geo", "GeoIP.mmdb")}
+}
+
 var monitorOnce sync.Once
 
 // StartMonitor launches the access-log collector once per process.
@@ -47,7 +63,7 @@ func StartMonitor() {
 		if err != nil {
 			return
 		}
-		c := &monitor.Collector{Store: s, Sites: monitorSites}
+		c := &monitor.Collector{Store: s, Sites: monitorSites, GeoPaths: monitorGeoPaths}
 		go c.Run()
 	})
 }
@@ -56,7 +72,7 @@ func monitorHandle[T any](fn func(s *monitor.Store, req T) (interface{}, error))
 	return func(c *gin.Context) {
 		var req T
 		if c.Request.Method == "POST" {
-			if err := c.ShouldBindJSON(&req); err != nil {
+			if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
 				helper.BadRequest(c, err)
 				return
 			}
@@ -92,7 +108,7 @@ type monitorSettings struct {
 }
 
 func openrestyConf() (string, *monitorNginx, error) {
-	app, err := repo.NewIAppRepo().GetFirst(repo.NewIAppRepo().WithKey("openresty"))
+	app, err := repo.NewIAppRepo().GetFirst(repo.NewIAppRepo().WithKey(constant.AppOpenresty))
 	if err != nil {
 		return "", nil, err
 	}
@@ -105,8 +121,10 @@ func openrestyConf() (string, *monitorNginx, error) {
 
 type monitorNginx struct{ container string }
 
-const rtOld = `"$http_x_forwarded_for"';`
-const rtNew = `"$http_x_forwarded_for" $request_time';`
+var (
+	logFormatMainRe       = regexp.MustCompile(`(?s)\blog_format\s+main\b[^;]*;`)
+	logFormatTrailingQuRe = regexp.MustCompile(`(['"])(\s*;)\z`)
+)
 
 func monitorHasRT() bool {
 	file, _, err := openrestyConf()
@@ -117,7 +135,19 @@ func monitorHasRT() bool {
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(data), rtNew)
+	m := logFormatMainRe.FindString(string(data))
+	return m != "" && strings.Contains(m, "$request_time")
+}
+
+func writeFileAtomic(file string, data []byte, perm os.FileMode) error {
+	if perm == 0 {
+		perm = 0o644
+	}
+	tmp := file + ".monitor-tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmp, file)
 }
 
 func monitorSettingsView(s *monitor.Store) monitorSettings {
@@ -159,25 +189,37 @@ func (a *MonitorRouter) InitRouter(Router *gin.RouterGroup) {
 		if err != nil {
 			return nil, err
 		}
+		perm := os.FileMode(0o644)
+		if st, err := os.Stat(file); err == nil {
+			perm = st.Mode().Perm()
+		}
 		data, err := os.ReadFile(file)
 		if err != nil {
 			return nil, err
 		}
 		text := string(data)
-		if strings.Contains(text, rtNew) {
+		loc := logFormatMainRe.FindStringIndex(text)
+		if loc == nil {
+			return nil, errors.New("log_format main directive not found in nginx.conf")
+		}
+		block := text[loc[0]:loc[1]]
+		if strings.Contains(block, "$request_time") {
 			return nil, nil
 		}
-		if !strings.Contains(text, rtOld) {
-			return nil, os.ErrInvalid
+		if !logFormatTrailingQuRe.MatchString(block) {
+			return nil, errors.New("unsupported log_format main format in nginx.conf")
 		}
-		if err := os.WriteFile(file+".bak-monitor", data, 0644); err != nil {
+		newBlock := logFormatTrailingQuRe.ReplaceAllString(block, " $$request_time$1$2")
+		updated := text[:loc[0]] + newBlock + text[loc[1]:]
+
+		if err := writeFileAtomic(file+".bak-monitor", data, perm); err != nil {
 			return nil, err
 		}
-		if err := os.WriteFile(file, []byte(strings.Replace(text, rtOld, rtNew, 1)), 0644); err != nil {
+		if err := writeFileAtomic(file, []byte(updated), perm); err != nil {
 			return nil, err
 		}
 		if err := nginxReload(ng.container); err != nil {
-			_ = os.WriteFile(file, data, 0644)
+			_ = writeFileAtomic(file, data, perm)
 			return nil, err
 		}
 		return nil, nil
@@ -225,9 +267,9 @@ func (a *MonitorRouter) InitRouter(Router *gin.RouterGroup) {
 			return nil, err
 		}
 		type row struct {
-			Alias   string         `json:"alias"`
-			Domain  string         `json:"domain"`
-			Enabled bool           `json:"enabled"`
+			Alias   string `json:"alias"`
+			Domain  string `json:"domain"`
+			Enabled bool   `json:"enabled"`
 			monitor.Totals
 		}
 		rows := []row{}

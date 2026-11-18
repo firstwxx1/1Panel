@@ -132,6 +132,8 @@ func isTerminalRevalidationEndpoint(reqPath string) bool {
 func isInternalOnlyAgentEndpoint(reqPath string) bool {
 	normalizedPath := path.Clean(reqPath)
 	return normalizedPath == "/api/v2/xpack/alert/offline/email" ||
+		normalizedPath == "/api/v2/xpack/node" ||
+		strings.HasPrefix(normalizedPath, "/api/v2/xpack/node/") ||
 		strings.HasPrefix(normalizedPath, "/api/v2/internal/mcp/") ||
 		normalizedPath == "/api/v2/xpack/alert/offline/webhook" ||
 		normalizedPath == "/api/v2/hosts/firewall/port" ||

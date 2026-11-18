@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime"
-	"mime/multipart"
 	"net/http"
 	"net/url"
 	"path"
@@ -85,19 +83,16 @@ func OperationLog() gin.HandlerFunc {
 		}
 
 		formatMap := make(map[string]interface{})
-		if len(operationDic.BodyKeys) != 0 {
+		isMultipart := strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.GetHeader("Content-Type"))), "multipart/form-data")
+		if len(operationDic.BodyKeys) != 0 && !isMultipart {
 			body, err := io.ReadAll(c.Request.Body)
 			if err == nil {
 				c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
 			}
 			bodyMap := make(map[string]interface{})
-			if strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
-				bodyMap, _ = parseMultipart(body, c.Request.Header.Get("Content-Type"))
-			} else {
-				decoder := json.NewDecoder(bytes.NewReader(body))
-				decoder.UseNumber()
-				_ = decoder.Decode(&bodyMap)
-			}
+			decoder := json.NewDecoder(bytes.NewReader(body))
+			decoder.UseNumber()
+			_ = decoder.Decode(&bodyMap)
 			for _, key := range operationDic.BodyKeys {
 				if _, ok := bodyMap[key]; ok {
 					formatMap[key] = bodyMap[key]
@@ -333,6 +328,8 @@ func normalizeOperationPath(reqPath string) string {
 func newDB(pathItem string) (*gorm.DB, error) {
 	dbFile := ""
 	switch {
+	case strings.HasPrefix(pathItem, "/core/xpack/nodes") || strings.HasPrefix(pathItem, "/core/xpack/panels"):
+		dbFile = path.Join(global.CONF.Base.InstallDir, "1panel/db/core.db")
 	case strings.HasPrefix(pathItem, "/core/xpack") || strings.HasPrefix(pathItem, "/xpack"):
 		dbFile = path.Join(global.CONF.Base.InstallDir, "1panel/db/xpack.db")
 	case strings.HasPrefix(pathItem, "/core/enterprise") || strings.HasPrefix(pathItem, "/enterprise"):
@@ -343,9 +340,12 @@ func newDB(pathItem string) (*gorm.DB, error) {
 		dbFile = path.Join(global.CONF.Base.InstallDir, "1panel/db/agent.db")
 	}
 
-	db, _ := gorm.Open(sqlite.Open(dbFile), &gorm.Config{
+	db, err := gorm.Open(sqlite.Open(dbFile), &gorm.Config{
 		DisableForeignKeyConstraintWhenMigrating: true,
 	})
+	if err != nil {
+		return nil, err
+	}
 	sqlDB, err := db.DB()
 	if err != nil {
 		return nil, err
@@ -390,36 +390,6 @@ func replaceStr(val string, rep ...string) string {
 		val = strings.ReplaceAll(val, item, "")
 	}
 	return val
-}
-
-func parseMultipart(formData []byte, contentType string) (map[string]interface{}, error) {
-	d, params, err := mime.ParseMediaType(contentType)
-	if err != nil || d != "multipart/form-data" {
-		return nil, http.ErrNotMultipart
-	}
-	boundary, ok := params["boundary"]
-	if !ok {
-		return nil, http.ErrMissingBoundary
-	}
-	reader := multipart.NewReader(bytes.NewReader(formData), boundary)
-	ret := make(map[string]interface{})
-
-	f, err := reader.ReadForm(32 << 20)
-	if err != nil {
-		return nil, err
-	}
-
-	for k, v := range f.Value {
-		if len(v) > 0 {
-			ret[k] = v[0]
-		}
-	}
-	for k, v := range f.File {
-		if len(v) > 0 {
-			ret[k] = v[0].Filename
-		}
-	}
-	return ret, nil
 }
 
 func mergeResolvedData(headerVal string, values map[string]interface{}) {

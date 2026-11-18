@@ -202,7 +202,7 @@ const changeNode = async (command: string) => {
                     routerToNameWithQuery('home', { t: Date.now() });
                     return;
                 }
-                if (!item.isBound) {
+                if (item.isBound === false) {
                     MsgError(i18n.global.t('xpack.node.nodeUnbindHelper'));
                     return;
                 }
@@ -210,7 +210,7 @@ const changeNode = async (command: string) => {
                     MsgError(i18n.global.t('xpack.node.nodeUnhealthyHelper'));
                     return;
                 }
-                if (props.version != item.version) {
+                if (props.version && item.version && props.version != item.version) {
                     MsgError(i18n.global.t('setting.versionNotSame'));
                     return;
                 }

@@ -80,6 +80,22 @@
                 </el-table-column>
             </el-table>
         </div>
+
+        <el-dialog v-model="chatDialogVisible" :title="$t('pro.alert.selectChat')" width="460px">
+            <div class="hint mb-2">{{ $t('pro.alert.selectChatHint') }}</div>
+            <el-select v-model="pickedChatId" style="width: 100%">
+                <el-option
+                    v-for="c in chatOptions"
+                    :key="c.id"
+                    :value="c.id"
+                    :label="c.name ? `${c.name} (${c.id})` : c.id"
+                />
+            </el-select>
+            <template #footer>
+                <el-button @click="chatDialogVisible = false">{{ $t('commons.button.cancel') }}</el-button>
+                <el-button type="primary" @click="confirmPickChat">{{ $t('commons.button.confirm') }}</el-button>
+            </template>
+        </el-dialog>
     </div>
 </template>
 
@@ -107,6 +123,9 @@ const loading = ref(false);
 const saving = ref(false);
 const testing = ref(false);
 const fetching = ref(false);
+const chatDialogVisible = ref(false);
+const chatOptions = ref<{ id: string; name: string }[]>([]);
+const pickedChatId = ref('');
 
 const groups = [
     { key: 'site', rules: ['cert_expire', 'site_5xx', 'site_tamper'] },
@@ -115,7 +134,6 @@ const groups = [
 ];
 const hasThreshold = ['cert_expire', 'site_5xx', 'waf_attack'];
 
-// same rules as the backend: numeric id (groups start with -) or @channel; token like 123456789:AA...
 const reChatID = /^(-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$/;
 const reBotTok = /^\d{5,20}:[A-Za-z0-9_-]{30,}$/;
 const chatErr = computed(() => {
@@ -130,7 +148,11 @@ const tokenErr = computed(() => {
 });
 const checkChannel = (forTest: boolean) => {
     const tg = cfg.value!.telegram;
-    const err = chatErr.value || tokenErr.value;
+    if ((forTest || tg.enabled) && !(tg.token || '').trim()) {
+        ElMessage.error(t('pro.alert.tokenRequired'));
+        return false;
+    }
+    const err = tokenErr.value || chatErr.value;
     if (err) {
         ElMessage.error(err);
         return false;
@@ -179,6 +201,14 @@ const test = async () => {
     }
 };
 const fetchChats = async () => {
+    if (!(cfg.value?.telegram.token || '').trim()) {
+        ElMessage.error(t('pro.alert.tokenRequired'));
+        return;
+    }
+    if (tokenErr.value) {
+        ElMessage.error(tokenErr.value);
+        return;
+    }
     fetching.value = true;
     try {
         const list = (await telegramChats(cfg.value!.telegram)).data || [];
@@ -186,10 +216,23 @@ const fetchChats = async () => {
             ElMessage.warning(t('pro.alert.noChat'));
             return;
         }
-        cfg.value!.telegram.chatId = list[list.length - 1].id;
+        if (list.length === 1) {
+            cfg.value!.telegram.chatId = list[0].id;
+            return;
+        }
+        chatOptions.value = list;
+        const currentId = (cfg.value!.telegram.chatId || '').trim();
+        pickedChatId.value = list.some((c) => c.id === currentId) ? currentId : list[list.length - 1].id;
+        chatDialogVisible.value = true;
     } finally {
         fetching.value = false;
     }
+};
+const confirmPickChat = () => {
+    if (cfg.value && pickedChatId.value) {
+        cfg.value.telegram.chatId = pickedChatId.value;
+    }
+    chatDialogVisible.value = false;
 };
 const clearRecords = async () => {
     await ElMessageBox.confirm(t('pro.alert.clear') + '?', { type: 'warning' });

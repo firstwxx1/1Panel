@@ -240,7 +240,7 @@ func (u *SnapshotService) SnapshotRecover(req dto.SnapshotRecover) error {
 			return
 		}
 		_ = os.RemoveAll(rootDir)
-		controller.RestartPanel(true, true, true)
+		controller.RestartPanel(global.IsMaster, true, true)
 	}()
 	return nil
 }
@@ -351,6 +351,24 @@ func backupBeforeRecover(name string, itemHelper *snapRecoverHelper) error {
 	if err != nil {
 		return err
 	}
+	if !global.IsMaster {
+		etcNodeDir := path.Join(baseDir, "etc_node")
+		if err := os.MkdirAll(etcNodeDir, 0o700); err != nil {
+			return err
+		}
+		for _, nodeFile := range []string{"/etc/1panel/node.json", "/etc/1panel/.nodeProxyID"} {
+			if itemHelper.FileOp.Stat(nodeFile) {
+				if err := itemHelper.FileOp.CopyFile(nodeFile, etcNodeDir); err != nil {
+					return err
+				}
+			}
+		}
+		if itemHelper.FileOp.Stat("/etc/1panel/node") {
+			if err := itemHelper.FileOp.CopyDir("/etc/1panel/node", etcNodeDir); err != nil {
+				return err
+			}
+		}
+	}
 	if itemHelper.FileOp.Stat(constant.DaemonJsonPath) {
 		err = itemHelper.FileOp.CopyFile(constant.DaemonJsonPath, baseDir)
 		itemHelper.Task.LogWithStatus(i18n.GetWithName("SnapCopy", constant.DaemonJsonPath), err)
@@ -447,6 +465,28 @@ func recoverBaseData(src string, itemHelper *snapRecoverHelper) error {
 		itemHelper.Task.LogWithStatus(i18n.GetWithName("SnapCopy", path.Join(svcBasePath, scriptAgentName)), err)
 		if err != nil {
 			return err
+		}
+	}
+	if !global.IsMaster {
+		etcNodeDir := path.Join(src, "etc_node")
+		if itemHelper.FileOp.Stat(etcNodeDir) {
+			_ = os.MkdirAll("/etc/1panel", 0o700)
+			for _, name := range []string{"node.json", ".nodeProxyID"} {
+				srcFile := path.Join(etcNodeDir, name)
+				if itemHelper.FileOp.Stat(srcFile) {
+					if err := itemHelper.FileOp.CopyFile(srcFile, "/etc/1panel"); err != nil {
+						return err
+					}
+					_ = os.Chmod(path.Join("/etc/1panel", name), 0o600)
+				}
+			}
+			srcCertDir := path.Join(etcNodeDir, "node")
+			if itemHelper.FileOp.Stat(srcCertDir) {
+				if err := itemHelper.FileOp.CopyDir(srcCertDir, "/etc/1panel"); err != nil {
+					return err
+				}
+				_ = os.Chmod("/etc/1panel/node", 0o700)
+			}
 		}
 	}
 

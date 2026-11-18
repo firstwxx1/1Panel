@@ -140,6 +140,8 @@ func RegisterImages(rootRouter *gin.RouterGroup) {
 			mimeType = "image/svg+xml"
 		}
 		_, _ = f.Seek(0, io.SeekStart)
+		c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("Content-Type", mimeType)
 		_, _ = io.Copy(c.Writer, f)
 	})

@@ -2,8 +2,10 @@ package lang
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -108,28 +110,86 @@ func loadRestorePath(upgradeDir string) (string, error) {
 	return folders[0], nil
 }
 
+func copyGeoFromLocalOpenResty(targetPath string) bool {
+	patterns := []string{
+		filepath.Join(global.CONF.Base.InstallDir, "1panel/apps/openresty/*/1pwaf/data/geo/GeoIP.mmdb"),
+		filepath.Join(global.CONF.Base.InstallDir, "1panel/apps/local/openresty/*/1pwaf/data/geo/GeoIP.mmdb"),
+	}
+	for _, pattern := range patterns {
+		matches, _ := filepath.Glob(pattern)
+		for _, src := range matches {
+			st, err := os.Stat(src)
+			if err != nil || st.IsDir() || st.Size() <= 100*1024 {
+				continue
+			}
+			if err := os.MkdirAll(path.Dir(targetPath), 0o755); err != nil {
+				continue
+			}
+			in, err := os.Open(src)
+			if err != nil {
+				continue
+			}
+			tmp := targetPath + ".tmp"
+			out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+			if err != nil {
+				_ = in.Close()
+				continue
+			}
+			_, cpErr := io.Copy(out, in)
+			_ = in.Close()
+			clErr := out.Close()
+			if cpErr != nil || clErr != nil {
+				_ = os.Remove(tmp)
+				continue
+			}
+			if err := os.Rename(tmp, targetPath); err == nil {
+				global.LOG.Info("copied GeoIP.mmdb from local openresty 1pwaf")
+				return true
+			}
+			_ = os.Remove(tmp)
+		}
+	}
+	return false
+}
+
 func downloadLangFromRemote(fileOp files.FileOp) {
-	path := fmt.Sprintf("%s/language/lang.tar.gz", global.ResourceURL())
-	if err := fileOp.DownloadFile(path, "/usr/local/bin/lang.tar.gz"); err != nil {
-		global.LOG.Errorf("download lang.tar.gz failed, err: %v", err)
+	if _, err := os.Stat("/usr/local/bin/1pctl"); err != nil {
+		return
+	}
+	pathItem := fmt.Sprintf("%s/language/lang.tar.gz", global.ResourceURL())
+	if err := fileOp.DownloadFile(pathItem, "/usr/local/bin/lang.tar.gz"); err != nil {
+		_ = os.Remove("/usr/local/bin/lang.tar.gz")
+		global.LOG.Debugf("download lang.tar.gz skipped: %v", err)
 		return
 	}
 	if !fileOp.Stat("/usr/local/bin/lang.tar.gz") {
-		global.LOG.Error("download lang.tar.gz failed, no such file")
 		return
 	}
 	if err := cmd.NewCommandMgr().Run("tar", "zxvfC", "/usr/local/bin/lang.tar.gz", "/usr/local/bin/"); err != nil {
-		global.LOG.Errorf("decompress lang.tar.gz failed, %v", err)
+		_ = os.Remove("/usr/local/bin/lang.tar.gz")
+		global.LOG.Debugf("decompress lang.tar.gz skipped: %v", err)
 		return
 	}
 	_ = os.Remove("/usr/local/bin/lang.tar.gz")
 	global.LOG.Info("download lang successful")
 }
+
 func downloadGeoFromRemote(fileOp files.FileOp, targetPath string) {
 	_ = os.MkdirAll(path.Dir(targetPath), os.ModePerm)
+	if copyGeoFromLocalOpenResty(targetPath) {
+		return
+	}
+	if !global.IsMaster {
+		// Child nodes receive GeoIP.mmdb directly from the master over mTLS if remote download is unavailable.
+		return
+	}
 	pathItem := fmt.Sprintf("%s/geo/GeoIP.mmdb", global.ResourceURL())
 	if err := fileOp.DownloadFile(pathItem, targetPath); err != nil {
-		global.LOG.Errorf("download geo ip failed, err: %v", err)
+		_ = os.Remove(targetPath)
+		if copyGeoFromLocalOpenResty(targetPath) {
+			return
+		}
+		global.LOG.Warnf("download geo ip failed, err: %v", err)
 		return
 	}
 	global.LOG.Info("download geo ip successful")

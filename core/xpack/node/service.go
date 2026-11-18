@@ -3,6 +3,8 @@ package node
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -45,7 +47,57 @@ type NodeView struct {
 	CreatedAt         time.Time `json:"createdAt"`
 }
 
-var nameRule = regexp.MustCompile(`^[\p{Han}A-Za-z0-9_\-]{1,30}$`)
+var (
+	nameRule     = regexp.MustCompile(`^[\p{Han}A-Za-z0-9_\-]{1,30}$`)
+	hostnameRule = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*$`)
+)
+
+func validateEndpointAddr(raw string) error {
+	if raw == "" || strings.TrimSpace(raw) != raw {
+		return errors.New("invalid address")
+	}
+	for _, r := range raw {
+		if r <= 0x20 || r == 0x7f || strings.ContainsRune("/?#@'\"`\\", r) {
+			return errors.New("invalid characters in address")
+		}
+	}
+	host := raw
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	if net.ParseIP(host) != nil {
+		return nil
+	}
+	if strings.Contains(host, ":") || !hostnameRule.MatchString(host) {
+		return errors.New("invalid hostname or IP address")
+	}
+	return nil
+}
+
+func normalizeJoinAddr(raw string) (string, error) {
+	addr := strings.TrimSpace(raw)
+	if strings.HasPrefix(addr, "[") && strings.HasSuffix(addr, "]") {
+		addr = addr[1 : len(addr)-1]
+	}
+	if addr == "" {
+		return "", errors.New("cannot determine node address")
+	}
+	for _, r := range addr {
+		if r <= 0x20 || r == 0x7f || strings.ContainsRune("/?#@'\"`\\", r) {
+			return "", errors.New("invalid node address")
+		}
+	}
+	if ip := net.ParseIP(addr); ip != nil {
+		if ip.IsLoopback() || ip.IsUnspecified() {
+			return "", errors.New("loopback or unspecified address is not allowed for child node")
+		}
+		return ip.String(), nil
+	}
+	if strings.Contains(addr, ":") || strings.EqualFold(addr, "localhost") || !hostnameRule.MatchString(addr) {
+		return "", errors.New("invalid node hostname")
+	}
+	return addr, nil
+}
 
 func groupNames() map[uint]string {
 	var groups []model.Group
@@ -93,9 +145,13 @@ func localView(names map[uint]string) NodeView {
 	v.SyncStatus = "success"
 	v.GroupID = defaultGroupID()
 	v.GroupBelong = names[v.GroupID]
-	var alias string
-	if err := global.DB.Table("settings").Select("value").Where("key = ?", "MasterAlias").Scan(&alias).Error; err == nil {
-		v.Description = ""
+	if alias := strings.TrimSpace(UIGetSettings()["masterAlias"]); alias != "" {
+		v.Description = alias
+	} else {
+		var dbAlias string
+		if err := global.DB.Table("settings").Select("value").Where("key = ?", "MasterAlias").Scan(&dbAlias).Error; err == nil {
+			v.Description = strings.TrimSpace(dbAlias)
+		}
 	}
 	return v
 }
@@ -103,13 +159,62 @@ func localView(names map[uint]string) NodeView {
 // List returns the master plus every child node (kind "node") for the switcher.
 func List() ([]NodeView, error) {
 	var rows []model.Node
-	if err := global.DB.Where("kind = ?", kindNode).Order("id").Find(&rows).Error; err != nil {
+	if err := global.DB.Where("kind = ?", kindNode).Order("is_favorite DESC, id ASC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	names := groupNames()
 	out := []NodeView{localView(names)}
 	for _, n := range rows {
 		out = append(out, view(n, names))
+	}
+	return out, nil
+}
+
+// SimplePanelView matches the dashboard panel carousel item shape expected by home/index.vue.
+type SimplePanelView struct {
+	ID                uint    `json:"id"`
+	Name              string  `json:"name"`
+	Addr              string  `json:"addr"`
+	Port              int     `json:"port"`
+	Protocol          string  `json:"protocol"`
+	Status            string  `json:"status"`
+	Message           string  `json:"message"`
+	Description       string  `json:"description"`
+	Version           string  `json:"version"`
+	SystemVersion     string  `json:"systemVersion"`
+	SecurityEntrance  string  `json:"securityEntrance"`
+	CPUTotal          int     `json:"cpuTotal"`
+	CPUUsedPercent    float64 `json:"cpuUsedPercent"`
+	MemoryTotal       uint64  `json:"memoryTotal"`
+	MemoryUsedPercent float64 `json:"memoryUsedPercent"`
+	Load1             float64 `json:"load1"`
+}
+
+func ListSimplePanels() ([]SimplePanelView, error) {
+	var rows []model.Node
+	if err := global.DB.Where("kind = ?", kindPanel).Order("is_favorite DESC, id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]SimplePanelView, 0, len(rows))
+	for _, n := range rows {
+		out = append(out, SimplePanelView{
+			ID:                n.ID,
+			Name:              n.Name,
+			Addr:              panelURL(n),
+			Port:              n.Port,
+			Protocol:          n.Protocol,
+			Status:            n.Status,
+			Message:           n.Message,
+			Description:       n.Description,
+			Version:           n.Version,
+			SystemVersion:     n.SystemVersion,
+			SecurityEntrance:  n.Entrance,
+			CPUTotal:          n.CPUTotal,
+			CPUUsedPercent:    n.CPUUsedPercent,
+			MemoryTotal:       n.MemoryTotal,
+			MemoryUsedPercent: n.MemoryUsedPercent,
+			Load1:             n.Load1,
+		})
 	}
 	return out, nil
 }
@@ -150,14 +255,38 @@ func Search(req SearchReq) (*SearchRes, error) {
 	if err := db.Count(&res.Total).Error; err != nil {
 		return nil, err
 	}
-	var rows []model.Node
-	if err := db.Order("id").Limit(req.PageSize).Offset((req.Page - 1) * req.PageSize).Find(&rows).Error; err != nil {
-		return nil, err
-	}
 	names := groupNames()
-	if req.Kind == kindNode && req.Page == 1 && req.Info == "" && (req.GroupID == 0 || req.GroupID == defaultGroupID()) {
-		res.Items = append(res.Items, localView(names))
+	includeLocal := false
+	var lv NodeView
+	if req.Kind == kindNode {
+		lv = localView(names)
+		groupOK := req.GroupID == 0 || req.GroupID == lv.GroupID
+		infoOK := req.Info == ""
+		if !infoOK {
+			q := strings.ToLower(req.Info)
+			infoOK = strings.Contains(strings.ToLower(lv.Name), q) ||
+				strings.Contains(strings.ToLower(lv.Addr), q) ||
+				strings.Contains(strings.ToLower(lv.Description), q)
+		}
+		includeLocal = groupOK && infoOK
+	}
+	limit := req.PageSize
+	offset := (req.Page - 1) * req.PageSize
+	if includeLocal {
 		res.Total++
+		if req.Page == 1 {
+			res.Items = append(res.Items, lv)
+			limit = req.PageSize - 1
+			offset = 0
+		} else {
+			offset = (req.Page-1)*req.PageSize - 1
+		}
+	}
+	var rows []model.Node
+	if limit > 0 {
+		if err := db.Order("is_favorite DESC, id ASC").Limit(limit).Offset(offset).Find(&rows).Error; err != nil {
+			return nil, err
+		}
 	}
 	for _, n := range rows {
 		res.Items = append(res.Items, view(n, names))
@@ -179,11 +308,17 @@ func validateName(name string, exceptID uint) error {
 
 type CreateReq struct {
 	Name        string `json:"name"`
+	Mode        string `json:"mode"`
 	GroupID     uint   `json:"groupID"`
 	Description string `json:"description"`
 	AgentPort   int    `json:"agentPort"`
-	// SSH installs
-	SSH *SSHInstall `json:"ssh"`
+	// SSH installs (nested or flat when Mode == "ssh")
+	SSH        *SSHInstall `json:"ssh"`
+	User       string      `json:"user"`
+	AuthMode   string      `json:"authMode"`
+	Password   string      `json:"password"`
+	PrivateKey string      `json:"privateKey"`
+	PassPhrase string      `json:"passPhrase"`
 	// panels
 	Kind     string `json:"kind"`
 	Addr     string `json:"addr"`
@@ -216,15 +351,48 @@ func Create(req CreateReq) (*CreateRes, error) {
 	if _, err := loadAuthority(); err != nil {
 		return nil, err
 	}
+	if req.Mode == "ssh" && req.SSH == nil {
+		req.SSH = &SSHInstall{
+			Addr:       req.Addr,
+			Port:       req.Port,
+			User:       req.User,
+			AuthMode:   req.AuthMode,
+			Password:   req.Password,
+			PrivateKey: req.PrivateKey,
+			PassPhrase: req.PassPhrase,
+		}
+	}
 	n := model.Node{
 		Name: req.Name, Kind: kindNode, GroupID: req.GroupID, Description: req.Description, Port: req.AgentPort,
 		ProxyID: newSecret(32), Status: statusPending,
 	}
 	if req.SSH != nil {
+		req.SSH.Addr = strings.TrimSpace(req.SSH.Addr)
+		req.SSH.User = strings.TrimSpace(req.SSH.User)
 		if req.SSH.Addr == "" || req.SSH.User == "" {
 			return nil, errors.New("ssh address and user are required")
 		}
-		if req.SSH.Port == 0 {
+		if err := validateEndpointAddr(req.SSH.Addr); err != nil {
+			return nil, err
+		}
+		authMode := req.SSH.AuthMode
+		if authMode == "" {
+			authMode = "password"
+			req.SSH.AuthMode = authMode
+		}
+		switch authMode {
+		case "password":
+			if req.SSH.Password == "" {
+				return nil, errors.New("ssh password is required")
+			}
+		case "key":
+			if strings.TrimSpace(req.SSH.PrivateKey) == "" {
+				return nil, errors.New("ssh private key is required")
+			}
+		default:
+			return nil, errors.New("invalid ssh auth mode")
+		}
+		if req.SSH.Port <= 0 || req.SSH.Port > 65535 {
 			req.SSH.Port = 22
 		}
 		n.Addr = req.SSH.Addr
@@ -242,8 +410,19 @@ func Create(req CreateReq) (*CreateRes, error) {
 }
 
 func createPanel(req CreateReq) (*CreateRes, error) {
-	if req.Addr == "" || req.Port <= 0 {
-		return nil, errors.New("panel address and port are required")
+	req.Addr = strings.TrimSpace(req.Addr)
+	if req.Addr == "" || req.Port <= 0 || req.Port > 65535 {
+		return nil, errors.New("panel address and valid port are required")
+	}
+	if err := validateEndpointAddr(req.Addr); err != nil {
+		return nil, err
+	}
+	proto := req.Protocol
+	if proto == "" {
+		proto = "http"
+	}
+	if proto != "http" && proto != "https" {
+		return nil, errors.New("protocol must be http or https")
 	}
 	key := ""
 	if req.APIKey != "" {
@@ -252,10 +431,6 @@ func createPanel(req CreateReq) (*CreateRes, error) {
 			return nil, err
 		}
 		key = enc
-	}
-	proto := req.Protocol
-	if proto != "https" {
-		proto = "http"
 	}
 	n := model.Node{
 		Name: req.Name, Kind: kindPanel, GroupID: req.GroupID, Description: req.Description,
@@ -294,12 +469,22 @@ func Update(req UpdateReq) error {
 	}
 	if n.Kind == kindPanel {
 		if req.Addr != "" {
+			req.Addr = strings.TrimSpace(req.Addr)
+			if err := validateEndpointAddr(req.Addr); err != nil {
+				return err
+			}
 			update["addr"] = req.Addr
 		}
-		if req.Port > 0 {
+		if req.Port != 0 {
+			if req.Port < 1 || req.Port > 65535 {
+				return errors.New("invalid panel port")
+			}
 			update["port"] = req.Port
 		}
 		if req.Protocol != "" {
+			if req.Protocol != "http" && req.Protocol != "https" {
+				return errors.New("protocol must be http or https")
+			}
 			update["protocol"] = req.Protocol
 		}
 		update["entrance"] = strings.Trim(req.Entrance, "/")
@@ -376,6 +561,14 @@ func Restart(id uint) error {
 
 // --- one-click join (token authenticated, no session) ---
 
+func tokenExpired(n *model.Node) bool {
+	ref := n.UpdatedAt
+	if ref.IsZero() {
+		ref = n.CreatedAt
+	}
+	return time.Since(ref) > 24*time.Hour
+}
+
 func nodeByToken(token string) (*model.Node, error) {
 	if len(token) < 20 {
 		return nil, errors.New("invalid token")
@@ -384,10 +577,31 @@ func nodeByToken(token string) (*model.Node, error) {
 	if err := global.DB.Where("join_token = ? AND kind = ?", token, kindNode).First(&n).Error; err != nil {
 		return nil, errors.New("invalid or used token")
 	}
-	if time.Since(n.CreatedAt) > 24*time.Hour {
+	if tokenExpired(&n) {
 		return nil, errors.New("token expired")
 	}
 	return &n, nil
+}
+
+// GetJoinCommandByID returns (and refreshes if expired/empty) the one-click join command for a Pending node.
+func GetJoinCommandByID(id uint, master string) (string, error) {
+	var n model.Node
+	if err := global.DB.First(&n, id).Error; err != nil {
+		return "", err
+	}
+	if n.Kind != kindNode || (n.Status != statusPending && n.JoinToken == "") {
+		return "", errors.New("node is not pending join")
+	}
+	token := n.JoinToken
+	if token == "" || tokenExpired(&n) {
+		token = newSecret(40)
+		if err := global.DB.Model(&model.Node{}).Where("id = ?", n.ID).
+			Updates(map[string]interface{}{"join_token": token, "updated_at": time.Now()}).Error; err != nil {
+			return "", err
+		}
+	}
+	target := strings.TrimRight(master, "/") + "/api/v2/core/nodejoin/script?token=" + url.QueryEscape(token)
+	return fmt.Sprintf("curl -fsSLk %q | bash", target), nil
 }
 
 func JoinScript(masterURL, token string) (string, error) {
@@ -404,22 +618,30 @@ func JoinAgentPath(token string) (string, error) {
 	return agentBinaryPath()
 }
 
-// JoinBundle consumes the token: the node is addressed by the IP it connected from.
+// JoinBundle consumes the token atomically before issuing node credentials.
 func JoinBundle(token, addr string) (string, error) {
 	n, err := nodeByToken(token)
 	if err != nil {
 		return "", err
 	}
-	if addr == "" {
-		return "", errors.New("cannot determine node address")
-	}
-	script, err := bundleScript(n, addr)
+	cleanAddr, err := normalizeJoinAddr(addr)
 	if err != nil {
 		return "", err
 	}
-	err = global.DB.Model(&model.Node{}).Where("id = ?", n.ID).
-		Updates(map[string]interface{}{"addr": addr, "join_token": "", "status": statusInstalling}).Error
-	return script, err
+	res := global.DB.Model(&model.Node{}).
+		Where("id = ? AND join_token = ?", n.ID, token).
+		Updates(map[string]interface{}{"addr": cleanAddr, "join_token": "", "status": statusInstalling})
+	if res.Error != nil {
+		return "", res.Error
+	}
+	if res.RowsAffected != 1 {
+		return "", errors.New("invalid or used token")
+	}
+	script, err := bundleScript(n, cleanAddr)
+	if err != nil {
+		return "", err
+	}
+	return script, nil
 }
 
 // Start boots the background collector once the database is ready.

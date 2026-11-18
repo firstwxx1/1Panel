@@ -171,7 +171,10 @@ func (b *BaseApi) RunScript(c *gin.Context) {
 		return
 	}
 	scriptID := c.Query("script_id")
-	currentNode := c.Query("operateNode")
+	currentNode := strings.TrimSpace(c.Query("operateNode"))
+	if currentNode == "" || currentNode == "undefined" {
+		currentNode = "local"
+	}
 	intNum, _ := strconv.Atoi(scriptID)
 	if intNum == 0 {
 		if wshandleError(wsConn, fmt.Errorf("   no such script %v in library, please check and try again!", scriptID)) {
@@ -196,12 +199,14 @@ func (b *BaseApi) RunScript(c *gin.Context) {
 			return
 		}
 
-		quitChan := make(chan bool, 3)
 		tty.Start(quitChan)
 		go slave.Wait(quitChan)
 	} else {
 		connInfo, _, err := xpack.MultiNodeProvider.LoadNodeInfo(currentNode)
-		if wshandleError(wsConn, errors.WithMessage(err, "invalid param rows in request")) {
+		if err == nil && connInfo == nil {
+			err = fmt.Errorf("SSH connection info not available for node %s", currentNode)
+		}
+		if wshandleError(wsConn, errors.WithMessage(err, "load node connection info failed")) {
 			return
 		}
 

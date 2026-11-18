@@ -3,12 +3,13 @@
         <el-tabs v-model="activeTab" type="card" class="mb-3">
             <el-tab-pane v-for="tab in tabs" :key="tab.key" :label="$t('pro.waf.' + tab.key)" :name="tab.key" />
         </el-tabs>
-        <component :is="current" :key="activeTab" />
+        <component :is="current" :key="`${activeTab}-${globalStore.currentNode}`" />
     </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { GlobalStore } from '@/store';
 import Overview from './overview/index.vue';
 import Report from './report/index.vue';
 import Logs from './logs/index.vue';
@@ -17,6 +18,7 @@ import Lists from './lists/index.vue';
 import SiteSetting from './settings/site.vue';
 import GlobalSetting from './settings/global.vue';
 
+const globalStore = GlobalStore();
 const tabs = [
     { key: 'overview', comp: Overview },
     { key: 'attackReport', comp: Report },

@@ -44,7 +44,7 @@ export const loadLocaleMessages = async (locale: string) => {
     if (!i18n) {
         return targetLocale;
     }
-    i18n.global.setLocaleMessage(targetLocale, messages);
+    i18n.global.mergeLocaleMessage(targetLocale, messages);
     loadedLocales.add(targetLocale);
     return targetLocale;
 };

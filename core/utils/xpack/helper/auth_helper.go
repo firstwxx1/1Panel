@@ -16,6 +16,7 @@ import (
 	"github.com/1Panel-dev/1Panel/core/utils/req_helper/proxy_local"
 	terminalsession "github.com/1Panel-dev/1Panel/core/utils/terminal_session"
 	"github.com/1Panel-dev/1Panel/core/utils/xpack/providers"
+	"github.com/1Panel-dev/1Panel/core/xpack/node"
 	"github.com/gin-gonic/gin"
 )
 
@@ -187,7 +188,7 @@ func (a *authHelper) RevokeTerminalSessions(scope, userID, authSessionID string)
 	if err != nil {
 		return err
 	}
-	_, err = proxy_local.NewLocalClientWithContext(
+	_, localErr := proxy_local.NewLocalClientWithContext(
 		context.Background(),
 		"/api/v2/internal/terminal/sessions/revoke",
 		http.MethodPost,
@@ -195,5 +196,9 @@ func (a *authHelper) RevokeTerminalSessions(scope, userID, authSessionID string)
 		nil,
 		5*time.Second,
 	)
-	return err
+	childErr := node.RevokeChildTerminals(scope, userID, authSessionID)
+	if localErr != nil {
+		return localErr
+	}
+	return childErr
 }

@@ -4,12 +4,17 @@ package router
 
 import (
 	"errors"
+	"io"
+	"os"
 	"path"
+	"strings"
 	"sync"
 
 	"github.com/1Panel-dev/1Panel/agent/app/api/v2/helper"
+	"github.com/1Panel-dev/1Panel/agent/app/model"
 	"github.com/1Panel-dev/1Panel/agent/app/repo"
 	"github.com/1Panel-dev/1Panel/agent/app/service"
+	"github.com/1Panel-dev/1Panel/agent/constant"
 	"github.com/1Panel-dev/1Panel/agent/global"
 	"github.com/1Panel-dev/1Panel/agent/xpack/tamper"
 	"github.com/gin-gonic/gin"
@@ -30,12 +35,32 @@ func tamperSites() []tamperSite {
 	if err != nil {
 		return nil
 	}
+	byID := make(map[uint]model.Website, len(list))
+	for _, w := range list {
+		byID[w.ID] = w
+	}
 	var res []tamperSite
 	for _, w := range list {
-		if w.Type == "stream" || w.Alias == "" {
+		if w.Type == constant.Stream || w.Alias == "" {
 			continue
 		}
-		res = append(res, tamperSite{w.Alias, w.PrimaryDomain, path.Join(service.GetSiteDir(w.Alias), "index")})
+		baseAlias := w.Alias
+		if w.Type == constant.Subsite && w.ParentWebsiteID > 0 {
+			if p, ok := byID[w.ParentWebsiteID]; ok && p.Alias != "" {
+				baseAlias = p.Alias
+			}
+		}
+		indexBase := path.Join(service.GetSiteDir(baseAlias), "index")
+		root := indexBase
+		if sub := strings.TrimPrefix(path.Clean("/"+strings.TrimSpace(w.SiteDir)), "/"); sub != "" && sub != "." {
+			root = path.Join(indexBase, sub)
+		}
+		if w.Type == constant.Proxy || w.Type == constant.Deployment {
+			if st, err := os.Stat(root); err != nil || !st.IsDir() {
+				continue
+			}
+		}
+		res = append(res, tamperSite{w.Alias, w.PrimaryDomain, root})
 	}
 	return res
 }
@@ -71,7 +96,7 @@ func tamperHandle[T any](fn func(s *tamper.Store, req T) (interface{}, error)) g
 	return func(c *gin.Context) {
 		var req T
 		if c.Request.Method == "POST" {
-			if err := c.ShouldBindJSON(&req); err != nil {
+			if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
 				helper.BadRequest(c, err)
 				return
 			}
@@ -115,12 +140,15 @@ func (a *TamperRouter) InitRouter(Router *gin.RouterGroup) {
 		cfg := s.Config()
 		views := []tamperSiteView{}
 		for _, w := range tamperSites() {
-			sc := cfg.Sites[w.alias]
-			v := tamperSiteView{Alias: w.alias, Domain: w.domain, Root: w.root, Enabled: sc.Enabled, Restore: sc.Restore,
-				Excludes: sc.Excludes, Files: sc.Files, Pending: s.EventCount(w.alias)}
-			if v.Excludes == nil {
-				v.Excludes = []string{}
+			sc, exists := cfg.Sites[w.alias]
+			excludes := sc.Excludes
+			if !exists && excludes == nil {
+				excludes = append([]string(nil), tamper.DefaultExcludes...)
+			} else if excludes == nil {
+				excludes = []string{}
 			}
+			v := tamperSiteView{Alias: w.alias, Domain: w.domain, Root: w.root, Enabled: sc.Enabled, Restore: sc.Restore,
+				Excludes: excludes, Files: sc.Files, Pending: s.EventCount(w.alias)}
 			if !sc.BaselineAt.IsZero() {
 				v.BaselineAt = sc.BaselineAt.Format("2006-01-02 15:04:05")
 			}

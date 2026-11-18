@@ -61,14 +61,14 @@
                 </el-form-item>
                 <el-form-item v-else :label="$t('pro.uisetting.loginBackground')">
                     <div class="row">
-                        <img v-if="form.loginBackground === 'loginBackground'" :src="imgUrl('loginBackground')" class="thumb wide" />
-                        <el-tag :type="form.loginBackground === 'loginBackground' ? 'success' : 'info'">
-                            {{ form.loginBackground === 'loginBackground' ? $t('pro.uisetting.custom') : $t('pro.uisetting.isDefault') }}
+                        <img v-if="hasBgImage" :src="imgUrl('loginBackground')" class="thumb wide" />
+                        <el-tag :type="hasBgImage ? 'success' : 'info'">
+                            {{ hasBgImage ? $t('pro.uisetting.custom') : $t('pro.uisetting.isDefault') }}
                         </el-tag>
                         <el-upload :show-file-list="false" :auto-upload="false" accept="image/*" :on-change="(f: any) => pick('loginBackground', f)">
                             <el-button size="small">{{ $t('pro.uisetting.upload') }}</el-button>
                         </el-upload>
-                        <el-button size="small" :disabled="form.loginBackground !== 'loginBackground'" @click="reset('loginBackground')">
+                        <el-button size="small" :disabled="!hasBgImage" @click="reset('loginBackground')">
                             {{ $t('pro.uisetting.reset') }}
                         </el-button>
                     </div>
@@ -96,6 +96,7 @@ const brandKinds = ['logo', 'logoWithText', 'favicon'];
 const loading = ref(false);
 const stamp = ref(Date.now());
 const bgColor = ref('#ffffff');
+const hasBgImage = ref(false);
 const form = reactive<Record<string, string>>({
     title: '',
     masterAlias: '',
@@ -110,12 +111,29 @@ const form = reactive<Record<string, string>>({
 
 const imgUrl = (k: string) => `/api/v2/images/${k}?t=${stamp.value}`;
 
+const probeBgImage = (): Promise<boolean> =>
+    new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(true);
+        img.onerror = () => resolve(false);
+        img.src = imgUrl('loginBackground');
+    });
+
 const load = async () => {
     loading.value = true;
     try {
-        const d = (await searchXSetting()).data;
-        for (const k of Object.keys(form)) form[k] = d[k] || (k === 'loginBgType' ? 'image' : '');
-        bgColor.value = form.loginBgType === 'color' && form.loginBackground ? form.loginBackground : '#ffffff';
+        const d = (await searchXSetting()).data || {};
+        for (const k of Object.keys(form)) {
+            form[k] = d[k] || (k === 'loginBgType' ? 'image' : '');
+        }
+        if (form.loginBackground && form.loginBackground !== 'loginBackground') {
+            bgColor.value = form.loginBackground;
+            hasBgImage.value = await probeBgImage();
+        } else if (form.loginBackground === 'loginBackground') {
+            hasBgImage.value = true;
+        } else {
+            hasBgImage.value = false;
+        }
     } finally {
         loading.value = false;
     }
@@ -134,7 +152,10 @@ const pick = async (kind: string, f: any) => {
     loading.value = true;
     try {
         await uploadXImage(kind, file);
-        if (kind === 'loginBackground') await updateXSettingByKey('LoginBgType', 'image');
+        if (kind === 'loginBackground') {
+            hasBgImage.value = true;
+            await updateXSettingByKey('LoginBgType', 'image');
+        }
         ElMessage.success(t('pro.uisetting.uploaded'));
         await load();
         await refreshTheme();
@@ -145,6 +166,9 @@ const pick = async (kind: string, f: any) => {
 const keyOf = (k: string) => k.charAt(0).toUpperCase() + k.slice(1);
 const reset = async (kind: string) => {
     await updateXSettingByKey(keyOf(kind), '');
+    if (kind === 'loginBackground') {
+        hasBgImage.value = false;
+    }
     ElMessage.success(t('pro.uisetting.resetOk'));
     await load();
     await refreshTheme();
@@ -157,8 +181,13 @@ const saveText = async () => {
 };
 const saveLogin = async () => {
     await updateXSettingByKey('LoginBgType', form.loginBgType);
-    if (form.loginBgType === 'color') await updateXSettingByKey('LoginBackground', bgColor.value || '');
-    else if (form.loginBackground !== 'loginBackground') await updateXSettingByKey('LoginBackground', '');
+    if (form.loginBgType === 'color') {
+        // Save solid hex colour without clearing the uploaded loginBackground file on disk
+        await updateXSettingByKey('LoginBackground', bgColor.value || '#ffffff');
+    } else if (hasBgImage.value && form.loginBackground !== 'loginBackground') {
+        // Restore custom background image marker when switching back from solid color mode
+        await updateXSettingByKey('LoginBackground', 'loginBackground');
+    }
     await updateXSettingByKey('LoginBtnLinkColor', form.loginBtnLinkColor || '');
     ElMessage.success(t('pro.uisetting.saved'));
     await load();

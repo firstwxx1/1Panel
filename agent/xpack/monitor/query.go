@@ -14,6 +14,11 @@ type RangeReq struct {
 	End   int64  `json:"end"`
 }
 
+func localDayHour(ts int64) int64 {
+	t := time.Unix(ts, 0)
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location()).Unix() / 3600
+}
+
 // window resolves a named range to [start, end) in unix seconds plus the equally long previous window.
 func window(name string, from, to int64) (start, end, pstart int64, byDay bool) {
 	if from > 0 && to > from {
@@ -49,50 +54,54 @@ func siteClause(site string) (string, []interface{}) {
 }
 
 type Totals struct {
-	PV     int64   `json:"pv"`
-	UV     int64   `json:"uv"`
-	IP     int64   `json:"ip"`
-	Req    int64   `json:"req"`
-	Bytes  int64   `json:"bytes"`
-	Err4   int64   `json:"err4"`
-	Err5   int64   `json:"err5"`
-	AvgRT  float64 `json:"avgRt"` // seconds, -1 when the log format carries no request time
-	Spiders int64  `json:"spiders"`
+	PV      int64   `json:"pv"`
+	UV      int64   `json:"uv"`
+	IP      int64   `json:"ip"`
+	Req     int64   `json:"req"`
+	Bytes   int64   `json:"bytes"`
+	Err4    int64   `json:"err4"`
+	Err5    int64   `json:"err5"`
+	AvgRT   float64 `json:"avgRt"` // seconds, -1 when the log format carries no request time
+	RtCount int64   `json:"rtCount"`
+	Spiders int64   `json:"spiders"`
 }
 
 func (s *Store) totals(site string, from, to int64) (Totals, error) {
+	rdb := s.reader()
 	sc, sa := siteClause(site)
 	h0, h1 := from/3600, (to+3599)/3600
+	dayStartHour := localDayHour(from)
 	var t Totals
 	var rtsum float64
-	var rtcnt int64
 	args := append([]interface{}{h0, h1}, sa...)
-	row := s.db.QueryRow(`SELECT COALESCE(SUM(pv),0),COALESCE(SUM(req),0),COALESCE(SUM(bytes),0),COALESCE(SUM(e4),0),COALESCE(SUM(e5),0),
+	dayArgs := append([]interface{}{dayStartHour, h1}, sa...)
+
+	row := rdb.QueryRow(`SELECT COALESCE(SUM(pv),0),COALESCE(SUM(req),0),COALESCE(SUM(bytes),0),COALESCE(SUM(e4),0),COALESCE(SUM(e5),0),
 		COALESCE(SUM(rtsum),0),COALESCE(SUM(rtcnt),0) FROM agg WHERE hour >= ? AND hour < ?`+sc, args...)
-	if err := row.Scan(&t.PV, &t.Req, &t.Bytes, &t.Err4, &t.Err5, &rtsum, &rtcnt); err != nil {
+	if err := row.Scan(&t.PV, &t.Req, &t.Bytes, &t.Err4, &t.Err5, &rtsum, &t.RtCount); err != nil {
 		return t, err
 	}
 	t.AvgRT = -1
-	if rtcnt > 0 {
-		t.AvgRT = rtsum / float64(rtcnt)
+	if t.RtCount > 0 {
+		t.AvgRT = rtsum / float64(t.RtCount)
 	}
-	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT ip), COUNT(*) FROM (SELECT DISTINCT ip, ua FROM vis2 WHERE hour >= ? AND hour < ?`+sc+`)`, args...).Scan(&t.IP, &t.UV); err != nil {
+	if err := rdb.QueryRow(`SELECT COUNT(DISTINCT ip), COUNT(*) FROM (SELECT DISTINCT ip, ua FROM vis2 WHERE hour >= ? AND hour < ?`+sc+`)`, dayArgs...).Scan(&t.IP, &t.UV); err != nil {
 		return t, err
 	}
-	// ip count should also include static-only visitors; the ip dimension has them
-	_ = s.db.QueryRow(`SELECT COUNT(DISTINCT k) FROM dim WHERE dim = 'ip' AND hour >= ? AND hour < ?`+sc, args...).Scan(&t.IP)
-	_ = s.db.QueryRow(`SELECT COALESCE(SUM(cnt),0) FROM dim WHERE dim = 'spider' AND hour >= ? AND hour < ?`+sc, args...).Scan(&t.Spiders)
+	// ip count should also include static-only visitors; the ip dimension is keyed by localDay(ts)
+	_ = rdb.QueryRow(`SELECT COUNT(DISTINCT k) FROM dim WHERE dim = 'ip' AND hour >= ? AND hour < ?`+sc, dayArgs...).Scan(&t.IP)
+	_ = rdb.QueryRow(`SELECT COALESCE(SUM(cnt),0) FROM dim WHERE dim = 'spider' AND hour >= ? AND hour < ?`+sc, args...).Scan(&t.Spiders)
 	return t, nil
 }
 
 type TrendPoint struct {
-	Time   string `json:"time"`
-	PV     int64  `json:"pv"`
-	Req    int64  `json:"req"`
-	Bytes  int64  `json:"bytes"`
-	Err4   int64  `json:"err4"`
-	Err5   int64  `json:"err5"`
-	UV     int64  `json:"uv"`
+	Time  string `json:"time"`
+	PV    int64  `json:"pv"`
+	Req   int64  `json:"req"`
+	Bytes int64  `json:"bytes"`
+	Err4  int64  `json:"err4"`
+	Err5  int64  `json:"err5"`
+	UV    int64  `json:"uv"`
 }
 
 type Overview struct {
@@ -102,6 +111,7 @@ type Overview struct {
 }
 
 func (s *Store) Overview(req RangeReq) (*Overview, error) {
+	rdb := s.reader()
 	start, end, pstart, byDay := window(req.Range, req.Start, req.End)
 	cur, err := s.totals(req.Site, start, end)
 	if err != nil {
@@ -111,9 +121,10 @@ func (s *Store) Overview(req RangeReq) (*Overview, error) {
 	if err != nil {
 		return nil, err
 	}
+	h0, h1 := start/3600, (end+3599)/3600
 	sc, sa := siteClause(req.Site)
-	args := append([]interface{}{start / 3600, (end + 3599) / 3600}, sa...)
-	rows, err := s.db.Query(`SELECT hour, SUM(pv), SUM(req), SUM(bytes), SUM(e4), SUM(e5) FROM agg WHERE hour >= ? AND hour < ?`+sc+` GROUP BY hour`, args...)
+	args := append([]interface{}{h0, h1}, sa...)
+	rows, err := rdb.Query(`SELECT hour, SUM(pv), SUM(req), SUM(bytes), SUM(e4), SUM(e5) FROM agg WHERE hour >= ? AND hour < ?`+sc+` GROUP BY hour`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +139,7 @@ func (s *Store) Overview(req RangeReq) (*Overview, error) {
 		t := time.Unix(hour*3600, 0)
 		key := t.Format("15:00")
 		if byDay {
-			key = t.Format("01-02")
+			key = t.Format("2006-01-02")
 		}
 		b := buckets[key]
 		if b == nil {
@@ -141,7 +152,8 @@ func (s *Store) Overview(req RangeReq) (*Overview, error) {
 		b.Err4 += p.Err4
 		b.Err5 += p.Err5
 	}
-	uvRows, err := s.db.Query(`SELECT h, COUNT(*) FROM vis2 WHERE hour >= ? AND hour < ?`+sc+` GROUP BY h`, args...)
+	uvArgs := append([]interface{}{localDayHour(start), h1, h0, h1}, sa...)
+	uvRows, err := rdb.Query(`SELECT h, COUNT(*) FROM vis2 WHERE hour >= ? AND hour < ? AND h >= ? AND h < ?`+sc+` GROUP BY h`, uvArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +166,7 @@ func (s *Store) Overview(req RangeReq) (*Overview, error) {
 		t := time.Unix(h*3600, 0)
 		key := t.Format("15:00")
 		if byDay {
-			key = t.Format("01-02")
+			key = t.Format("2006-01-02")
 		}
 		b := buckets[key]
 		if b == nil {
@@ -167,7 +179,7 @@ func (s *Store) Overview(req RangeReq) (*Overview, error) {
 	var trend []TrendPoint
 	if byDay {
 		for t := time.Unix(start, 0); t.Unix() < end; t = t.AddDate(0, 0, 1) {
-			key := t.Format("01-02")
+			key := t.Format("2006-01-02")
 			if b := buckets[key]; b != nil {
 				trend = append(trend, *b)
 			} else {
@@ -214,10 +226,14 @@ func (s *Store) Distribution(req DistReq) ([]DistItem, error) {
 		req.Limit = 10
 	}
 	start, end, _, _ := window(req.Range, req.Start, req.End)
+	h0, h1 := start/3600, (end+3599)/3600
+	if req.Dim == "ip" {
+		h0 = localDayHour(start)
+	}
 	sc, sa := siteClause(req.Site)
-	args := append([]interface{}{req.Dim, start / 3600, (end + 3599) / 3600}, sa...)
+	args := append([]interface{}{req.Dim, h0, h1}, sa...)
 	args = append(args, req.Limit)
-	rows, err := s.db.Query(`SELECT k, SUM(cnt) c FROM dim WHERE dim = ? AND hour >= ? AND hour < ?`+sc+` GROUP BY k ORDER BY c DESC LIMIT ?`, args...)
+	rows, err := s.reader().Query(`SELECT k, SUM(cnt) c FROM dim WHERE dim = ? AND hour >= ? AND hour < ?`+sc+` GROUP BY k ORDER BY c DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +276,7 @@ func (s *Store) Errors(req ErrReq) (map[string]interface{}, error) {
 	start, end, _, _ := window(req.Range, req.Start, req.End)
 	sc, sa := siteClause(req.Site)
 	args := append([]interface{}{start / 3600, (end + 3599) / 3600}, sa...)
-	rows, err := s.db.Query(`SELECT k, SUM(cnt), MAX(last) FROM dim WHERE dim = 'error' AND hour >= ? AND hour < ?`+sc+` GROUP BY k`, args...)
+	rows, err := s.reader().Query(`SELECT k, SUM(cnt), MAX(last) FROM dim WHERE dim = 'error' AND hour >= ? AND hour < ?`+sc+` GROUP BY k`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -292,21 +308,27 @@ func (s *Store) Errors(req ErrReq) (map[string]interface{}, error) {
 	if to > total {
 		to = total
 	}
-	return map[string]interface{}{"items": all[from:to], "total": total}, rows.Err()
+	items := all[from:to]
+	if items == nil {
+		items = []ErrItem{}
+	}
+	return map[string]interface{}{"items": items, "total": total}, rows.Err()
 }
 
 type RealtimeReq struct {
-	Site   string `json:"site"`
-	IP     string `json:"ip"`
-	URL    string `json:"url"`
-	Region string `json:"region"`
-	Method string `json:"method"`
-	Status string `json:"status"` // "", "2xx".."5xx" or an exact code
-	Spider string `json:"spider"` // "", "yes" or "no"
-	Start  int64  `json:"start"`
-	End    int64  `json:"end"`
-	Page   int    `json:"page"`
-	Size   int    `json:"size"`
+	Site    string `json:"site"`
+	IP      string `json:"ip"`
+	URL     string `json:"url"`
+	Region  string `json:"region"`
+	Method  string `json:"method"`
+	Status  string `json:"status"` // "", "2xx".."5xx" or an exact code
+	Spider  string `json:"spider"` // "", "yes" or "no"
+	Start   int64  `json:"start"`
+	End     int64  `json:"end"`
+	Page    int    `json:"page"`
+	Size    int    `json:"size"`
+	OrderBy string `json:"orderBy"` // "", "id", "rt", "bytes"
+	Order   string `json:"order"`   // "", "asc", "desc"
 }
 
 type Hit struct {
@@ -340,10 +362,12 @@ type LogStats struct {
 	IPs     int64   `json:"ips"`
 	Spiders int64   `json:"spiders"`
 	AvgRt   float64 `json:"avgRt"` // seconds
+	RtCount int64   `json:"rtCount"`
 	Bytes   int64   `json:"bytes"`
 }
 
 func (s *Store) Realtime(req RealtimeReq) (map[string]interface{}, error) {
+	rdb := s.reader()
 	if req.Page <= 0 {
 		req.Page = 1
 	}
@@ -355,21 +379,22 @@ func (s *Store) Realtime(req RealtimeReq) (map[string]interface{}, error) {
 	}
 	where := " WHERE 1=1"
 	var args []interface{}
+	escapeLike := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	if req.Site != "" {
 		where += " AND site = ?"
 		args = append(args, req.Site)
 	}
 	if req.IP != "" {
-		where += " AND ip LIKE ?"
-		args = append(args, "%"+req.IP+"%")
+		where += ` AND ip LIKE ? ESCAPE '\'`
+		args = append(args, "%"+escapeLike.Replace(req.IP)+"%")
 	}
 	if req.URL != "" {
-		where += " AND url LIKE ?"
-		args = append(args, "%"+req.URL+"%")
+		where += ` AND url LIKE ? ESCAPE '\'`
+		args = append(args, "%"+escapeLike.Replace(req.URL)+"%")
 	}
 	if req.Region != "" {
-		where += " AND (country || ' ' || province) LIKE ?"
-		args = append(args, "%"+req.Region+"%")
+		where += ` AND (country || ' ' || province) LIKE ? ESCAPE '\'`
+		args = append(args, "%"+escapeLike.Replace(req.Region)+"%")
 	}
 	if req.Method != "" {
 		where += " AND method = ?"
@@ -395,18 +420,42 @@ func (s *Store) Realtime(req RealtimeReq) (map[string]interface{}, error) {
 	case "no":
 		where += " AND NOT " + spiderCond()
 	}
+
 	var st LogStats
 	var rtsum float64
-	var rtcnt int64
-	if err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(status = 200),0), COALESCE(SUM(status >= 400),0), COUNT(DISTINCT ip),
+	if err := rdb.QueryRow(`SELECT COUNT(*), COALESCE(SUM(status = 200),0), COALESCE(SUM(status >= 400),0), COUNT(DISTINCT ip),
 		COALESCE(SUM(`+spiderCond()+`),0), COALESCE(SUM(rt),0), COALESCE(SUM(rt > 0),0), COALESCE(SUM(bytes),0) FROM hits`+where, args...).
-		Scan(&st.Req, &st.OK, &st.Err, &st.IPs, &st.Spiders, &rtsum, &rtcnt, &st.Bytes); err != nil {
+		Scan(&st.Req, &st.OK, &st.Err, &st.IPs, &st.Spiders, &rtsum, &st.RtCount, &st.Bytes); err != nil {
 		return nil, err
 	}
-	if rtcnt > 0 {
-		st.AvgRt = rtsum / float64(rtcnt)
+	if st.RtCount > 0 {
+		st.AvgRt = rtsum / float64(st.RtCount)
 	}
-	rows, err := s.db.Query(`SELECT id, ts, site, ip, country, province, method, url, status, bytes, rt, ua, referer FROM hits`+where+` ORDER BY id DESC LIMIT ? OFFSET ?`,
+
+	orderCol := "id"
+	switch strings.ToLower(strings.TrimSpace(req.OrderBy)) {
+	case "rt":
+		orderCol = "rt"
+	case "bytes":
+		orderCol = "bytes"
+	case "time", "ts":
+		orderCol = "ts"
+	case "id", "":
+		orderCol = "id"
+	}
+	orderDir := "DESC"
+	switch strings.ToLower(strings.TrimSpace(req.Order)) {
+	case "asc", "ascending":
+		orderDir = "ASC"
+	case "desc", "descending", "":
+		orderDir = "DESC"
+	}
+	orderClause := fmt.Sprintf(" ORDER BY id %s", orderDir)
+	if orderCol != "id" {
+		orderClause = fmt.Sprintf(" ORDER BY %s %s, id DESC", orderCol, orderDir)
+	}
+
+	rows, err := rdb.Query(`SELECT id, ts, site, ip, country, province, method, url, status, bytes, rt, ua, referer FROM hits`+where+orderClause+` LIMIT ? OFFSET ?`,
 		append(args, req.Size, (req.Page-1)*req.Size)...)
 	if err != nil {
 		return nil, err
@@ -431,17 +480,17 @@ type LivePoint struct {
 	Bytes int64 `json:"bytes"`
 }
 
-// Live reports the last minute of requests in 5 second slots.
+// Live reports the last minute of requests in aligned 5-second slots.
 func (s *Store) Live(site string) (map[string]interface{}, error) {
-	now := time.Now().Unix()
-	from := now - 60
-	q := `SELECT (ts - ?) / 5, COUNT(*), COALESCE(SUM(bytes),0) FROM hits WHERE ts > ?`
-	args := []interface{}{from, from}
+	end := ((time.Now().Unix() / 5) + 1) * 5
+	from := end - 60
+	q := `SELECT (ts - ?) / 5, COUNT(*), COALESCE(SUM(bytes),0) FROM hits WHERE ts >= ? AND ts < ?`
+	args := []interface{}{from, from, end}
 	if site != "" {
 		q += " AND site = ?"
 		args = append(args, site)
 	}
-	rows, err := s.db.Query(q+" GROUP BY 1", args...)
+	rows, err := s.reader().Query(q+" GROUP BY 1", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -458,9 +507,9 @@ func (s *Store) Live(site string) (map[string]interface{}, error) {
 		}
 		if slot >= 0 && slot < 12 {
 			series[slot].Req, series[slot].Bytes = n, b
+			req += n
+			bytes += b
 		}
-		req += n
-		bytes += b
 	}
 	return map[string]interface{}{"req": req, "bytes": bytes, "series": series}, rows.Err()
 }

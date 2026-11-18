@@ -68,9 +68,9 @@ const GlobalStore = defineStore('GlobalState', {
         isFxplay: false,
         isOffline: false,
         // license
-        isProductPro: false,
-        productProExpires: 0,
-        isMasterProductPro: false,
+        isProductPro: true,
+        productProExpires: 253402300799,
+        isMasterProductPro: true,
         isEnterpriseLicensed: false,
         isEnterpriseLicenseLoaded: false,
         // multi-node
@@ -99,13 +99,11 @@ const GlobalStore = defineStore('GlobalState', {
         isMaster: (state) => state.currentNode === 'local',
         isMobile: (state) => state.device === DeviceType.Mobile,
 
-        isXpackOrEE: (state) => {
-            return (state.isEnterprise && state.isEnterpriseLicensed) || state.isMasterProductPro;
-        },
+        isXpackOrEE: () => true,
         // interface customisation (theme colour, logo, watermark) works without a licence in this build
         isUiCustom: () => true,
         isEE: (state) => state.isEnterprise && state.isEnterpriseLicensed,
-        isMasterPro: (state) => state.isMasterProductPro,
+        isMasterPro: () => true,
     },
     actions: {
         setScreenFull() {

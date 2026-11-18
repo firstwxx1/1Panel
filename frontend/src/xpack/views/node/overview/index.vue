@@ -29,7 +29,7 @@
                         @click="current = n.name"
                     >
                         <div class="line">
-                            <span class="nname">{{ n.isLocal ? $t('pro.node.master') : n.name }}</span>
+                            <span class="nname">{{ n.isLocal ? globalStore.getMasterAlias() : n.name }}</span>
                             <el-tag size="small" :type="statusType(n.status)" effect="light">{{ $t('pro.node.status' + n.status) }}</el-tag>
                             <span class="addr">{{ n.addr }}</span>
                         </div>
@@ -120,9 +120,11 @@
 
                     <Section :title="$t('pro.node.databases')" :node="current" :token="token + dbToken" :loader="loadDbs">
                         <template #tools>
-                            <el-select v-model="dbType" size="small" style="width: 110px" @change="onDbType">
+                            <el-select v-model="dbType" size="small" style="width: 115px" @change="onDbType">
                                 <el-option value="mysql" label="MySQL" />
+                                <el-option value="mariadb" label="MariaDB" />
                                 <el-option value="postgresql" label="PostgreSQL" />
+                                <el-option value="mongodb" label="MongoDB" />
                             </el-select>
                             <el-select v-model="dbServer" size="small" style="width: 120px" @change="dbToken++">
                                 <el-option v-for="s in dbServers" :key="s" :value="s" :label="s" />
@@ -257,7 +259,11 @@ const loadSites = async (q: any) => {
     return { items: res.data?.items || [], total: res.data?.total || 0 };
 };
 const loadCerts = async (q: any) => {
-    const res = await nodeQuery(current.value, '/websites/ssl/search', { page: q.page, pageSize: q.pageSize, search: q.info });
+    const res = await nodeQuery(current.value, '/websites/ssl/search', {
+        page: q.page,
+        pageSize: q.pageSize,
+        domain: q.info,
+    });
     return { items: res.data?.items || [], total: res.data?.total || 0 };
 };
 const loadCrons = async (q: any) => {
@@ -265,7 +271,7 @@ const loadCrons = async (q: any) => {
         page: q.page,
         pageSize: q.pageSize,
         info: q.info,
-        orderBy: 'created_at',
+        orderBy: 'createdAt',
         order: 'null',
     });
     return { items: res.data?.items || [], total: res.data?.total || 0 };
@@ -279,7 +285,14 @@ const loadDbServers = async () => {
     dbServers.value = [];
     dbServer.value = '';
     try {
-        const res = await nodeQuery(current.value, '/databases/db/search', { type: dbType.value, page: 1, pageSize: 50, info: '' });
+        const res = await nodeQuery(current.value, '/databases/db/search', {
+            type: dbType.value,
+            page: 1,
+            pageSize: 50,
+            info: '',
+            orderBy: 'createdAt',
+            order: 'null',
+        });
         dbServers.value = (res.data?.items || []).map((d: any) => d.name);
         dbServer.value = dbServers.value[0] || '';
     } catch {
@@ -290,8 +303,21 @@ const loadDbServers = async () => {
 const onDbType = () => loadDbServers();
 const loadDbs = async (q: any) => {
     if (!dbServer.value) return { items: [], total: 0 };
-    const url = dbType.value === 'postgresql' ? '/databases/pg/search' : '/databases/search';
-    const res = await nodeQuery(current.value, url, { page: q.page, pageSize: q.pageSize, info: q.info, database: dbServer.value });
+    const url =
+        dbType.value === 'postgresql'
+            ? '/databases/pg/search'
+            : dbType.value === 'mongodb'
+              ? '/databases/mongodb/search'
+              : '/databases/search';
+    const res = await nodeQuery(current.value, url, {
+        page: q.page,
+        pageSize: q.pageSize,
+        info: q.info,
+        database: dbServer.value,
+        type: dbType.value,
+        orderBy: 'createdAt',
+        order: 'null',
+    });
     return { items: res.data?.items || [], total: res.data?.total || 0 };
 };
 

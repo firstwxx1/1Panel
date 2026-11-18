@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -24,12 +25,19 @@ var uiKeys = map[string]string{
 	"WatermarkShow":     "watermarkShow",
 	"MasterAlias":       "masterAlias",
 	"LoginBgType":       "loginBgType",
+	"LoginBgColor":      "loginBgColor",
 	"LoginBackground":   "loginBackground",
 	"LoginBtnLinkColor": "loginBtnLinkColor",
 	"Logo":              "logo",
 	"LogoWithText":      "logoWithText",
 	"Favicon":           "favicon",
 	"LoginImage":        "loginImage",
+}
+
+var cssColorRule = regexp.MustCompile(`^(#[0-9a-fA-F]{3,8}|rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(\s*,\s*(0|1|0?\.\d+))?\s*\))$`)
+
+func isValidCSSColor(s string) bool {
+	return cssColorRule.MatchString(strings.TrimSpace(s))
 }
 
 // keys that hold an uploaded file named after the key's json name
@@ -87,23 +95,75 @@ func UISetSetting(key, value string) error {
 	if len(value) > 64*1024 {
 		return fmt.Errorf("value too long")
 	}
+	value = strings.TrimSpace(value)
 	uiMu.Lock()
 	defer uiMu.Unlock()
 	uiLoadLocked()
-	if uiFileKinds[j] {
-		// the file kinds only accept "" (reset); uploads go through UIUpload
-		if value != "" && j != "loginBackground" {
-			return fmt.Errorf("use upload for %s", key)
+
+	switch j {
+	case "loginBackground":
+		if value != "" && value != "loginBackground" && !isValidCSSColor(value) {
+			return fmt.Errorf("invalid loginBackground value")
 		}
 		if value == "" {
-			_ = os.Remove(path.Join(uiThemeDir(), j))
+			if uiData["loginBgType"] != "color" {
+				_ = os.Remove(path.Join(uiThemeDir(), "loginBackground"))
+			}
+		} else if isValidCSSColor(value) {
+			uiData["loginBgColor"] = value
 		}
-	}
-	if j == "themeColor" || j == "watermark" {
+	case "loginBgColor":
+		if value != "" && !isValidCSSColor(value) {
+			return fmt.Errorf("invalid loginBgColor value")
+		}
+		if uiData["loginBgType"] == "color" {
+			if value == "" {
+				delete(uiData, "loginBackground")
+			} else {
+				uiData["loginBackground"] = value
+			}
+		}
+	case "loginBtnLinkColor":
+		if value != "" && !isValidCSSColor(value) {
+			return fmt.Errorf("invalid loginBtnLinkColor value")
+		}
+	case "loginBgType":
+		if value != "" && value != "image" && value != "color" {
+			return fmt.Errorf("invalid loginBgType value")
+		}
+		if value == "image" {
+			if _, err := os.Stat(path.Join(uiThemeDir(), "loginBackground")); err == nil {
+				uiData["loginBackground"] = "loginBackground"
+			} else if uiData["loginBackground"] != "loginBackground" {
+				delete(uiData, "loginBackground")
+			}
+		} else if value == "color" {
+			if col := uiData["loginBgColor"]; col != "" {
+				uiData["loginBackground"] = col
+			} else if uiData["loginBackground"] == "loginBackground" {
+				delete(uiData, "loginBackground")
+			}
+		}
+	case "themeColor", "watermark":
 		if value != "" && !json.Valid([]byte(value)) {
 			return fmt.Errorf("invalid json")
 		}
+		if j == "watermark" {
+			if value != "" {
+				uiData["watermarkShow"] = "Enable"
+			} else {
+				uiData["watermarkShow"] = "Disable"
+			}
+		}
+	default:
+		if uiFileKinds[j] {
+			if value != "" {
+				return fmt.Errorf("use upload for %s", key)
+			}
+			_ = os.Remove(path.Join(uiThemeDir(), j))
+		}
 	}
+
 	if value == "" {
 		delete(uiData, j)
 	} else {

@@ -51,7 +51,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue';
 import WafMap from '@/xpack/views/waf/map/index.vue';
-import { monDistribution, MonDistItem } from '@/xpack/api/monitor';
+import { monDistributionAgg, MonDistItem } from '@/xpack/api/monitor';
 import i18n from '@/lang';
 
 const props = defineProps<{ site: string; range: string }>();
@@ -79,22 +79,25 @@ const pick = () => {
 };
 watch(mapKind, pick);
 
-onMounted(async () => {
+const load = async () => {
     loading.value = true;
     try {
         const [c, p, ...rest] = await Promise.all([
-            monDistribution(props.site, props.range, 'country', 100),
-            monDistribution(props.site, props.range, 'province', 100),
-            ...spec.map((s) => monDistribution(props.site, props.range, s.dim, 10)),
+            monDistributionAgg({ site: props.site, range: props.range, dim: 'country', limit: 100 }),
+            monDistributionAgg({ site: props.site, range: props.range, dim: 'province', limit: 100 }),
+            ...spec.map((s) => monDistributionAgg({ site: props.site, range: props.range, dim: s.dim, limit: 10 })),
         ]);
-        countries.value = c.data || [];
-        provinces.value = p.data || [];
+        countries.value = c || [];
+        provinces.value = p || [];
         pick();
-        dims.value = spec.map((s, i) => ({ dim: s.dim, title: t('pro.monitor.' + s.key), items: rest[i].data || [] }));
+        dims.value = spec.map((s, i) => ({ dim: s.dim, title: t('pro.monitor.' + s.key), items: rest[i] || [] }));
     } finally {
         loading.value = false;
     }
-});
+};
+
+watch(() => [props.site, props.range], load);
+onMounted(load);
 </script>
 
 <style scoped>

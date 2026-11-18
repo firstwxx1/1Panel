@@ -41,7 +41,9 @@
                 <el-tag type="danger">{{ $t('pro.monitor.errors') }}: {{ stats.err }}</el-tag>
                 <el-tag type="info">{{ $t('pro.monitor.ipCount') }}: {{ stats.ips }}</el-tag>
                 <el-tag type="info">{{ $t('pro.monitor.spiderReq') }}: {{ stats.spiders }}</el-tag>
-                <el-tag type="info">{{ $t('pro.monitor.avgRt') }}: {{ Math.round(stats.avgRt * 1000) }}ms</el-tag>
+                <el-tag type="info">
+                    {{ $t('pro.monitor.avgRt') }}: {{ stats.avgRt > 0 ? Math.round(stats.avgRt * 1000) + 'ms' : '-' }}
+                </el-tag>
                 <el-tag type="info">{{ $t('pro.monitor.totalBytes') }}: {{ fmtBytes(stats.bytes) }}</el-tag>
                 <el-tag type="info">{{ $t('pro.monitor.logSize') }}: {{ fmtBytes(logSize) }}</el-tag>
             </div>
@@ -54,16 +56,16 @@
                 </el-select>
             </div>
             <el-table :data="items" v-loading="loading" @sort-change="onSort">
-                <el-table-column v-if="isMaster" prop="node" :label="$t('xpack.monitor.node')" min-width="110" show-overflow-tooltip>
+                <el-table-column v-if="isMaster" prop="node" :label="$t('pro.monitor.node')" min-width="110" show-overflow-tooltip>
                     <template #default="{ row }">{{ row.node || '-' }}</template>
                 </el-table-column>
                 <el-table-column prop="ip" label="IP" min-width="130" />
                 <el-table-column prop="region" :label="$t('pro.monitor.ipRegion')" min-width="130" />
                 <el-table-column :label="$t('pro.monitor.domain')" min-width="150">
-                    <template #default="{ row }">{{ domainOf(row.site) }}</template>
+                    <template #default="{ row }">{{ domainOf(row.site, row.node) }}</template>
                 </el-table-column>
                 <el-table-column prop="url" label="URL" min-width="220" show-overflow-tooltip />
-                <el-table-column :label="$t('pro.monitor.respBytes')" min-width="110">
+                <el-table-column prop="bytes" :label="$t('pro.monitor.respBytes')" sortable="custom" min-width="110">
                     <template #default="{ row }">{{ fmtBytes(row.bytes) }}</template>
                 </el-table-column>
                 <el-table-column prop="rt" :label="$t('pro.monitor.respTime')" sortable="custom" min-width="110">
@@ -92,7 +94,9 @@
         <el-dialog :model-value="!!detail" :title="$t('pro.monitor.logDetail')" width="640px" @close="detail = null">
             <el-descriptions v-if="detail" :column="1" border>
                 <el-descriptions-item label="IP">{{ detail.ip }} {{ detail.region }}</el-descriptions-item>
-                <el-descriptions-item :label="$t('pro.monitor.domain')">{{ domainOf(detail.site) }}</el-descriptions-item>
+                <el-descriptions-item :label="$t('pro.monitor.domain')">
+                    {{ domainOf(detail.site, detail.node) }}
+                </el-descriptions-item>
                 <el-descriptions-item :label="$t('pro.monitor.method')">{{ detail.method }}</el-descriptions-item>
                 <el-descriptions-item label="URL">{{ detail.url }}</el-descriptions-item>
                 <el-descriptions-item :label="$t('pro.monitor.status')">{{ detail.status }}</el-descriptions-item>
@@ -108,8 +112,16 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import SiteSelect from './SiteSelect.vue';
-import { monClear, monLogsAgg, MonHitNode, MonLogStats, MonSiteItem, splitSite } from '@/xpack/api/monitor';
-import { isMasterView, nodeQuery } from '@/xpack/api/aggregate';
+import {
+    monClear,
+    monLogsAgg,
+    MonHitNode,
+    MonLogReq,
+    MonLogStats,
+    MonSiteItem,
+    splitSite,
+} from '@/xpack/api/monitor';
+import { isMasterView, nodeExec } from '@/xpack/api/aggregate';
 import { fmtBytes, timeParams } from './util';
 import i18n from '@/lang';
 
@@ -119,7 +131,10 @@ const methods = ['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS'];
 const statuses = ['2xx', '3xx', '4xx', '5xx', '200', '301', '302', '304', '403', '404', '500', '502'];
 const f = reactive({ site: '', method: '', status: '', spider: '', url: '', ip: '', region: '' });
 const now = new Date();
-const dates = ref<Date[]>([new Date(now.getFullYear(), now.getMonth(), now.getDate()), new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59)]);
+const dates = ref<Date[]>([
+    new Date(now.getFullYear(), now.getMonth(), now.getDate()),
+    new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59),
+]);
 const items = ref<MonHitNode[]>([]);
 const stats = ref<MonLogStats>({ req: 0, ok: 0, err: 0, ips: 0, spiders: 0, avgRt: 0, bytes: 0 });
 const logSize = ref(0);
@@ -129,26 +144,33 @@ const size = ref(20);
 const loading = ref(false);
 const refresh = ref(0);
 const detail = ref<MonHitNode | null>(null);
-const sortRt = ref<string | null>(null);
+const sortBy = ref<'rt' | 'bytes' | undefined>(undefined);
+const sortOrder = ref<'asc' | 'desc' | undefined>(undefined);
 const isMaster = computed(() => isMasterView());
 let timer: number | undefined;
 
-const domainOf = (alias: string) => {
-    // hits from a specific node carry it in row.node; the merged site list is keyed by "node::alias"
+const domainOf = (alias: string, node?: string) => {
+    if (node) {
+        const exact = props.sites.find((x) => x.alias === `${node}::${alias}`);
+        if (exact) return exact.domain || alias;
+    }
     const s = props.sites.find((x) => splitSite(x.alias).alias === alias);
     return s?.domain || alias;
 };
-const req = (p: number, s: number) => ({ ...f, ...timeParams(dates.value), page: p, size: s });
+
+const req = (p: number, s: number): MonLogReq => ({
+    ...f,
+    ...timeParams(dates.value),
+    ...(sortBy.value && sortOrder.value ? { orderBy: sortBy.value, order: sortOrder.value } : {}),
+    page: p,
+    size: s,
+});
 
 const load = async () => {
     loading.value = true;
     try {
         const d = await monLogsAgg(req(page.value, size.value));
         items.value = d.items || [];
-        if (sortRt.value) {
-            const dir = sortRt.value === 'ascending' ? 1 : -1;
-            items.value = [...items.value].sort((a, b) => (a.rt - b.rt) * dir);
-        }
         stats.value = d.stats;
         total.value = d.total;
         logSize.value = d.logSize;
@@ -160,8 +182,15 @@ const search = () => {
     page.value = 1;
     load();
 };
-const onSort = (s: { order: string | null }) => {
-    sortRt.value = s.order;
+const onSort = (s: { prop: string; order: string | null }) => {
+    if ((s.prop === 'rt' || s.prop === 'bytes') && s.order) {
+        sortBy.value = s.prop;
+        sortOrder.value = s.order === 'ascending' ? 'asc' : 'desc';
+    } else {
+        sortBy.value = undefined;
+        sortOrder.value = undefined;
+    }
+    page.value = 1;
     load();
 };
 const setTimer = () => {
@@ -169,7 +198,6 @@ const setTimer = () => {
     timer = refresh.value ? window.setInterval(load, refresh.value * 1000) : undefined;
 };
 const clear = async () => {
-    // clearing writes to one node: on the master view require a specific site so we know which one
     const { node, alias } = splitSite(f.site);
     if (isMaster.value && !node) {
         ElMessage.warning(t('pro.monitor.clearNeedSite'));
@@ -177,7 +205,7 @@ const clear = async () => {
     }
     await ElMessageBox.confirm(t('pro.monitor.clearConfirm'), t('pro.monitor.clearLog'), { type: 'warning' });
     if (isMaster.value) {
-        await nodeQuery(node, '/xpack/monitor/clear', { site: alias });
+        await nodeExec(node, '/xpack/monitor/clear', { site: alias });
     } else {
         await monClear(f.site);
     }
@@ -194,7 +222,7 @@ const exportCsv = async () => {
             h.node,
             h.ip,
             h.region,
-            domainOf(h.site),
+            domainOf(h.site, h.node),
             h.method,
             h.url,
             h.status,
@@ -206,7 +234,7 @@ const exportCsv = async () => {
             .map(csv)
             .join(','),
     );
-    const blob = new Blob(['﻿' + head.join(',') + '\n' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const blob = new Blob(['\ufeff' + head.join(',') + '\n' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = 'access-log.csv';

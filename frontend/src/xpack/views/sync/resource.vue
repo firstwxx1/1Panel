@@ -12,7 +12,15 @@
                 <el-input v-model="keyword" clearable style="width: 240px" :placeholder="$t('pro.sync.search')" />
                 <el-button :icon="Refresh" @click="load" />
             </div>
-            <el-table ref="tableRef" :data="pageRows" v-loading="loading" @select="onSelect" @selection-change="(v: any[]) => (selected = v)">
+            <el-table
+                ref="tableRef"
+                :data="pageRows"
+                :class="{ 'hide-select-all': kind === 'app' }"
+                v-loading="loading"
+                @select="onSelect"
+                @select-all="onSelectAll"
+                @selection-change="(v: any[]) => (selected = v)"
+            >
                 <el-table-column type="selection" width="40" />
                 <template v-if="kind === 'image'">
                     <el-table-column prop="id" label="ID" min-width="140" show-overflow-tooltip />
@@ -67,7 +75,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { listAllNodes, nodeQuery, NodeRow } from '@/xpack/api/node';
@@ -90,6 +98,10 @@ const loading = ref(false);
 const busy = ref(false);
 const page = ref(1);
 const size = ref(10);
+
+watch(keyword, () => {
+    page.value = 1;
+});
 
 const fmtSize = (v: any) => {
     const n = Number(v);
@@ -117,6 +129,11 @@ const onSelect = (sel: any[], row: any) => {
     if (props.kind !== 'app') return;
     tableRef.value?.clearSelection();
     if (sel.includes(row)) tableRef.value?.toggleRowSelection(row, true);
+};
+const onSelectAll = () => {
+    if (props.kind === 'app') {
+        tableRef.value?.clearSelection();
+    }
 };
 const load = async () => {
     if (!src.value) return;
@@ -161,10 +178,11 @@ const run = async () => {
     busy.value = true;
     try {
         if (props.kind === 'image') {
+            const allTags = [...new Set(selected.value.flatMap((i) => i.tags || []).filter(Boolean))];
             await syncImages({
                 src: src.value,
                 dsts: dsts.value,
-                images: selected.value.map((i) => i.tags[0]),
+                images: allTags,
             });
         } else if (props.kind === 'app') {
             await syncApps({ src: src.value, dsts: dsts.value, name: selected.value[0].name, stop: stopSrc.value });
@@ -202,6 +220,9 @@ onMounted(async () => {
     display: flex;
     gap: 8px;
     margin-bottom: 10px;
+}
+.hide-select-all :deep(th.el-table-column--selection .el-checkbox) {
+    display: none;
 }
 .pager {
     margin-top: 10px;

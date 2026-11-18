@@ -7,12 +7,10 @@
                     <el-button type="primary" @click="openAdd">
                         {{ kind === 'nodes' ? $t('pro.node.addNode') : $t('pro.node.addPanel') }}
                     </el-button>
-                    <el-button v-if="kind === 'nodes'" @click="notReady">{{ $t('pro.node.backupMaster') }}</el-button>
-                    <el-button :disabled="!selected.length" @click="openGroup">{{ $t('pro.node.group') }}</el-button>
-                    <el-button v-if="kind === 'nodes'" :disabled="!selected.length" @click="notReady">
-                        {{ $t('pro.node.upgrade') }}
+                    <el-button v-if="kind === 'nodes'" :loading="upgrading" @click="onBatchUpgrade">
+                        {{ selectedBoundNodes.length ? $t('pro.node.upgradeSelected', { n: selectedBoundNodes.length }) : $t('pro.node.batchUpgrade') }}
                     </el-button>
-                    <el-button v-if="kind === 'nodes'" @click="notReady">{{ $t('pro.node.setting') }}</el-button>
+                    <el-button :disabled="!selected.length" @click="openGroup">{{ $t('pro.node.group') }}</el-button>
                     <el-button :disabled="!selected.length" @click="removeSelected">{{ $t('pro.node.delete') }}</el-button>
                 </div>
                 <div class="right">
@@ -25,7 +23,7 @@
                             <el-button :icon="Search" @click="filter" />
                         </template>
                     </el-input>
-                    <el-button :icon="Refresh" circle @click="search" />
+                    <el-button :icon="Refresh" circle @click="search()" />
                     <el-select v-model="refresh" style="width: 120px">
                         <el-option :value="0" :label="$t('pro.node.noRefresh')" />
                         <el-option :value="10" label="10s" />
@@ -35,15 +33,17 @@
                 </div>
             </div>
 
-            <el-table :data="items" v-loading="loading" @selection-change="(v: NodeRow[]) => (selected = v)">
+            <el-table :data="items" v-loading="loading || upgrading" @selection-change="(v: NodeRow[]) => (selected = v)">
                 <el-table-column type="selection" width="45" :selectable="(row: NodeRow) => !row.isLocal" />
                 <el-table-column :label="$t('pro.node.name')" min-width="160">
                     <template #default="{ row }">
                         <div class="name">
-                            <span>{{ row.isLocal ? $t('pro.node.master') : row.name }}</span>
+                            <span>{{ row.isLocal ? globalStore.getMasterAlias() : row.name }}</span>
                             <el-icon v-if="!row.isLocal" class="edit" @click="openEdit(row)"><Edit /></el-icon>
                         </div>
-                        <div class="sub">{{ row.addr }}{{ kind === 'panels' && row.port ? ':' + row.port : '' }}</div>
+                        <div class="sub">
+                            {{ kind === 'panels' && row.port ? `${formatHost(row.addr)}:${row.port}` : row.addr }}
+                        </div>
                     </template>
                 </el-table-column>
                 <el-table-column :label="$t('commons.table.status')" width="110">
@@ -80,16 +80,39 @@
                     </template>
                 </el-table-column>
                 <el-table-column :label="$t('pro.node.description')" min-width="140" show-overflow-tooltip prop="description" />
-                <el-table-column :label="$t('pro.node.operate')" width="190" fixed="right">
+                <el-table-column :label="$t('pro.node.operate')" width="240" fixed="right">
                     <template #default="{ row }">
                         <template v-if="!row.isLocal">
+                            <el-button
+                                v-if="kind === 'nodes' && row.status === 'Pending'"
+                                link
+                                type="primary"
+                                @click="showPendingJoinCmd(row)"
+                            >
+                                {{ $t('pro.node.copyJoinCmd') }}
+                            </el-button>
+                            <el-button
+                                v-if="kind === 'nodes' && row.status !== 'Pending'"
+                                link
+                                type="primary"
+                                :disabled="upgrading"
+                                @click="upgradeOne(row)"
+                            >
+                                {{ $t('pro.node.upgrade') }}
+                            </el-button>
                             <el-button link type="primary" @click="openEdit(row)">{{ $t('pro.node.edit') }}</el-button>
-                            <el-button link type="primary" @click="removeOne(row)">{{ $t('pro.node.delete') }}</el-button>
+                            <el-button link type="danger" @click="removeOne(row)">{{ $t('pro.node.delete') }}</el-button>
                             <el-dropdown trigger="click" @command="(cmd: string) => more(cmd, row)">
                                 <el-button link type="primary">{{ $t('pro.node.moreAction') }}</el-button>
                                 <template #dropdown>
                                     <el-dropdown-menu>
                                         <el-dropdown-item command="test">{{ $t('pro.node.test') }}</el-dropdown-item>
+                                        <el-dropdown-item v-if="kind === 'nodes' && row.status === 'Pending'" command="joinCmd">
+                                            {{ $t('pro.node.copyJoinCmd') }}
+                                        </el-dropdown-item>
+                                        <el-dropdown-item v-if="kind === 'nodes' && row.status !== 'Pending'" command="upgrade">
+                                            {{ $t('pro.node.upgrade') }}
+                                        </el-dropdown-item>
                                         <el-dropdown-item v-if="kind === 'nodes'" command="restart">
                                             {{ $t('pro.node.restart') }}
                                         </el-dropdown-item>
@@ -162,11 +185,11 @@
                                 <el-radio value="key">{{ $t('pro.node.authKey') }}</el-radio>
                             </el-radio-group>
                         </el-form-item>
-                        <el-form-item v-if="ssh.authMode === 'password'" :label="$t('pro.node.password')">
+                        <el-form-item v-if="ssh.authMode === 'password'" :label="$t('pro.node.password')" prop="sshPassword">
                             <el-input v-model="ssh.password" type="password" show-password />
                         </el-form-item>
                         <template v-else>
-                            <el-form-item :label="$t('pro.node.privateKey')">
+                            <el-form-item :label="$t('pro.node.privateKey')" prop="sshPrivateKey">
                                 <el-input v-model="ssh.privateKey" type="textarea" :rows="4" />
                             </el-form-item>
                             <el-form-item :label="$t('pro.node.passPhrase')">
@@ -179,7 +202,7 @@
                 <template v-if="kind === 'panels'">
                     <el-row :gutter="12">
                         <el-col :span="8">
-                            <el-form-item :label="$t('pro.node.protocol')">
+                            <el-form-item :label="$t('pro.node.protocol')" prop="protocol">
                                 <el-select v-model="form.protocol">
                                     <el-option value="http" label="http" />
                                     <el-option value="https" label="https" />
@@ -226,6 +249,24 @@
             </template>
         </el-dialog>
 
+        <!-- upgrade results -->
+        <el-dialog v-model="upgradeResultVisible" :title="$t('pro.node.upgradeResultTitle')" width="580px">
+            <el-table :data="upgradeResults" size="small">
+                <el-table-column prop="name" :label="$t('pro.node.name')" width="150" />
+                <el-table-column :label="$t('commons.table.status')" width="110">
+                    <template #default="{ row }">
+                        <el-tag :type="row.ok ? 'success' : 'danger'" size="small">
+                            {{ row.ok ? $t('pro.node.upgradeSuccess') : $t('pro.node.upgradeFailed') }}
+                        </el-tag>
+                    </template>
+                </el-table-column>
+                <el-table-column prop="message" :label="$t('pro.node.description')" show-overflow-tooltip />
+            </el-table>
+            <template #footer>
+                <el-button type="primary" @click="upgradeResultVisible = false">{{ $t('commons.button.confirm') }}</el-button>
+            </template>
+        </el-dialog>
+
         <!-- group -->
         <el-dialog v-model="groupVisible" :title="$t('pro.node.changeGroup')" width="420px">
             <el-select v-model="targetGroup" style="width: 100%">
@@ -244,33 +285,50 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, FormInstance } from 'element-plus';
 import { Edit, Refresh, Search } from '@element-plus/icons-vue';
 import { useI18n } from 'vue-i18n';
+import { GlobalStore } from '@/store';
 import { getGroupList } from '@/api/modules/group';
+import { invalidateNodeCache } from '@/xpack/api/aggregate';
 import {
     changeNodeGroup,
     createNode,
     deleteNodes,
+    getPendingNodeJoinCmd,
     NodeCreate,
     NodeRow,
     nodeJoinCommand,
+    NodeUpgradeResult,
     restartNode,
     searchNodes,
     testNode,
     updateNode,
+    upgradeNodes,
 } from '@/xpack/api/node';
 
 const props = defineProps<{ kind: 'nodes' | 'panels' }>();
 const { t } = useI18n();
+const globalStore = GlobalStore();
 
 const query = reactive({ page: 1, pageSize: 20, info: '', groupID: 0 });
 const items = ref<NodeRow[]>([]);
 const total = ref(0);
 const loading = ref(false);
+const upgrading = ref(false);
 const selected = ref<NodeRow[]>([]);
+const selectedBoundNodes = computed(() => selected.value.filter((r) => !r.isLocal && r.status !== 'Pending'));
 const groups = ref<{ id: number; name: string; isDefault: boolean }[]>([]);
 const refresh = ref(0);
 let timer: number | undefined;
 
-const groupLabel = (g: { name: string; isDefault: boolean }) => (g.isDefault && g.name.toLowerCase() === 'default' ? '默认' : g.name);
+const groupLabel = (g: { name: string; isDefault: boolean }) =>
+    g.isDefault && g.name.toLowerCase() === 'default' ? '默认' : g.name;
+
+const formatHost = (addr: string) => {
+    const a = (addr || '').trim();
+    if (a.includes(':') && !a.startsWith('[')) {
+        return `[${a}]`;
+    }
+    return a;
+};
 
 const statusType = (s: string) => {
     if (s === 'Healthy') return 'success';
@@ -279,7 +337,6 @@ const statusType = (s: string) => {
 };
 const statusText = (s: string) => t('pro.node.status' + s);
 const gb = (n: number) => (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
-const notReady = () => ElMessage.info(t('pro.node.notReady'));
 
 const search = async (silent = false) => {
     if (silent !== true) loading.value = true;
@@ -315,7 +372,15 @@ const blankForm = () => ({
     apiKey: '',
 });
 const form = reactive(blankForm());
-const ssh = reactive({ addr: '', port: 22, user: 'root', authMode: 'password', password: '', privateKey: '', passPhrase: '' });
+const ssh = reactive({
+    addr: '',
+    port: 22,
+    user: 'root',
+    authMode: 'password',
+    password: '',
+    privateKey: '',
+    passPhrase: '',
+});
 
 const nameRule = /^[一-龥A-Za-z0-9_-]{1,30}$/;
 const rules = computed(() => ({
@@ -323,11 +388,56 @@ const rules = computed(() => ({
         {
             required: true,
             trigger: 'blur',
-            validator: (_: any, v: string, cb: any) => (nameRule.test(v) && v !== 'local' ? cb() : cb(new Error(t('pro.node.nodeNameRule')))),
+            validator: (_: any, v: string, cb: any) =>
+                nameRule.test(v) && v !== 'local' ? cb() : cb(new Error(t('pro.node.nodeNameRule'))),
         },
     ],
-    sshAddr: [{ required: mode.value === 'ssh', validator: (_: any, __: string, cb: any) => (mode.value !== 'ssh' || ssh.addr ? cb() : cb(new Error(' '))), trigger: 'blur' }],
-    sshUser: [{ required: mode.value === 'ssh', validator: (_: any, __: string, cb: any) => (mode.value !== 'ssh' || ssh.user ? cb() : cb(new Error(' '))), trigger: 'blur' }],
+    sshAddr: [
+        {
+            required: mode.value === 'ssh',
+            validator: (_: any, __: string, cb: any) =>
+                mode.value !== 'ssh' || (ssh.addr || '').trim() ? cb() : cb(new Error(' ')),
+            trigger: 'blur',
+        },
+    ],
+    sshUser: [
+        {
+            required: mode.value === 'ssh',
+            validator: (_: any, __: string, cb: any) =>
+                mode.value !== 'ssh' || (ssh.user || '').trim() ? cb() : cb(new Error(' ')),
+            trigger: 'blur',
+        },
+    ],
+    sshPassword: [
+        {
+            required: mode.value === 'ssh' && ssh.authMode === 'password',
+            validator: (_: any, __: string, cb: any) =>
+                mode.value !== 'ssh' || ssh.authMode !== 'password' || ssh.password
+                    ? cb()
+                    : cb(new Error(t('pro.node.sshPassRequired'))),
+            trigger: 'blur',
+        },
+    ],
+    sshPrivateKey: [
+        {
+            required: mode.value === 'ssh' && ssh.authMode === 'key',
+            validator: (_: any, __: string, cb: any) =>
+                mode.value !== 'ssh' || ssh.authMode !== 'key' || (ssh.privateKey || '').trim()
+                    ? cb()
+                    : cb(new Error(t('pro.node.sshKeyRequired'))),
+            trigger: 'blur',
+        },
+    ],
+    protocol: [
+        {
+            required: props.kind === 'panels',
+            validator: (_: any, v: string, cb: any) =>
+                props.kind !== 'panels' || v === 'http' || v === 'https'
+                    ? cb()
+                    : cb(new Error(t('pro.node.invalidProtocol'))),
+            trigger: 'change',
+        },
+    ],
     addr: [{ required: props.kind === 'panels', message: ' ', trigger: 'blur' }],
     port: [{ required: props.kind === 'panels', message: ' ', trigger: 'blur' }],
     apiKey: [{ required: props.kind === 'panels', message: ' ', trigger: 'blur' }],
@@ -343,7 +453,15 @@ const openAdd = () => {
     mode.value = 'command';
     Object.assign(form, blankForm());
     if (props.kind === 'panels') form.port = 9999;
-    Object.assign(ssh, { addr: '', port: 22, user: 'root', authMode: 'password', password: '', privateKey: '', passPhrase: '' });
+    Object.assign(ssh, {
+        addr: '',
+        port: 22,
+        user: 'root',
+        authMode: 'password',
+        password: '',
+        privateKey: '',
+        passPhrase: '',
+    });
     formVisible.value = true;
 };
 
@@ -356,7 +474,7 @@ const openEdit = (row: NodeRow) => {
         description: row.description,
         addr: row.addr,
         port: row.port,
-        protocol: row.protocol || 'http',
+        protocol: row.protocol === 'https' ? 'https' : 'http',
         entrance: row.securityEntrance,
         apiKey: '',
     });
@@ -379,12 +497,63 @@ const copyCommand = async () => {
     ElMessage.success(t('pro.node.copied'));
 };
 
+const showPendingJoinCmd = async (row: NodeRow) => {
+    const res = await getPendingNodeJoinCmd(row.id);
+    command.value = res.data.command || '';
+    cmdVisible.value = true;
+    await copyCommand();
+};
+
+const upgradeResultVisible = ref(false);
+const upgradeResults = ref<NodeUpgradeResult[]>([]);
+
+const runUpgrade = async (ids: number[]) => {
+    upgrading.value = true;
+    try {
+        const res = await upgradeNodes(ids);
+        upgradeResults.value = res.data?.results || [];
+        invalidateNodeCache();
+        if (upgradeResults.value.length === 1) {
+            const r = upgradeResults.value[0];
+            if (r.ok) {
+                ElMessage.success(`${r.name}: ${r.message || t('pro.node.upgradeSuccess')}`);
+            } else {
+                ElMessage.error(`${r.name}: ${r.message || t('pro.node.upgradeFailed')}`);
+            }
+        } else if (upgradeResults.value.length > 1) {
+            upgradeResultVisible.value = true;
+        } else {
+            ElMessage.info(t('pro.node.noData'));
+        }
+        await search(true);
+    } finally {
+        upgrading.value = false;
+    }
+};
+
+const upgradeOne = async (row: NodeRow) => {
+    await ElMessageBox.confirm(t('pro.node.upgradeConfirmOne', { name: row.name }), t('pro.node.upgrade'), {
+        type: 'warning',
+    });
+    await runUpgrade([row.id]);
+};
+
+const onBatchUpgrade = async () => {
+    const ids = selectedBoundNodes.value.map((r) => r.id);
+    const msg = ids.length
+        ? t('pro.node.upgradeConfirmSelected', { n: ids.length })
+        : t('pro.node.upgradeConfirmAll');
+    await ElMessageBox.confirm(msg, t('pro.node.batchUpgrade'), { type: 'warning' });
+    await runUpgrade(ids);
+};
+
 const submit = async () => {
     if (!formRef.value) return;
     const ok = await formRef.value.validate().catch(() => false);
     if (!ok) return;
     saving.value = true;
     try {
+        const safeProto = form.protocol === 'https' ? 'https' : 'http';
         if (editing.value) {
             await updateNode(props.kind, {
                 id: form.id,
@@ -392,7 +561,13 @@ const submit = async () => {
                 groupID: form.groupID,
                 description: form.description,
                 ...(props.kind === 'panels'
-                    ? { addr: form.addr, port: form.port, protocol: form.protocol, entrance: form.entrance, apiKey: form.apiKey }
+                    ? {
+                          addr: form.addr.trim(),
+                          port: form.port,
+                          protocol: safeProto,
+                          entrance: form.entrance.trim(),
+                          apiKey: form.apiKey,
+                      }
                     : {}),
             });
             ElMessage.success(t('commons.msg.updateSuccess'));
@@ -400,9 +575,15 @@ const submit = async () => {
             const req: NodeCreate = { name: form.name, groupID: form.groupID, description: form.description };
             if (props.kind === 'nodes') {
                 req.agentPort = form.agentPort;
-                if (mode.value === 'ssh') req.ssh = { ...ssh };
+                if (mode.value === 'ssh') req.ssh = { ...ssh, addr: ssh.addr.trim(), user: ssh.user.trim() };
             } else {
-                Object.assign(req, { addr: form.addr, port: form.port, protocol: form.protocol, entrance: form.entrance, apiKey: form.apiKey });
+                Object.assign(req, {
+                    addr: form.addr.trim(),
+                    port: form.port,
+                    protocol: safeProto,
+                    entrance: form.entrance.trim(),
+                    apiKey: form.apiKey,
+                });
             }
             const res = await createNode(props.kind, req);
             if (props.kind === 'nodes' && mode.value === 'command') {
@@ -415,6 +596,7 @@ const submit = async () => {
                 ElMessage.success(t('commons.msg.createSuccess'));
             }
         }
+        invalidateNodeCache();
         formVisible.value = false;
         search();
     } finally {
@@ -427,6 +609,7 @@ const doDelete = async (ids: number[]) => {
     const key = props.kind === 'nodes' ? 'pro.node.delConfirm' : 'pro.node.delPanelConfirm';
     await ElMessageBox.confirm(t(key, { n: ids.length }), t('pro.node.delete'), { type: 'warning' });
     await deleteNodes(props.kind, ids);
+    invalidateNodeCache();
     ElMessage.success(t('commons.msg.deleteSuccess'));
     search();
 };
@@ -444,24 +627,42 @@ const openGroup = () => {
     groupVisible.value = true;
 };
 const applyGroup = async () => {
-    await changeNodeGroup(props.kind, selected.value.map((r) => r.id), targetGroup.value);
+    await changeNodeGroup(
+        props.kind,
+        selected.value.map((r) => r.id),
+        targetGroup.value,
+    );
     groupVisible.value = false;
     ElMessage.success(t('commons.msg.operationSuccess'));
     search();
 };
 
+const openPanelBookmark = (row: NodeRow) => {
+    const proto = row.protocol === 'https' ? 'https' : 'http';
+    const host = formatHost(row.addr);
+    if (!host) return;
+    const portPart = row.port ? `:${row.port}` : '';
+    const cleanEntrance = (row.securityEntrance || '').replace(/^\/+/, '');
+    const entrancePart = cleanEntrance ? `/${encodeURIComponent(cleanEntrance)}` : '';
+    window.open(`${proto}://${host}${portPart}${entrancePart}`, '_blank', 'noopener,noreferrer');
+};
+
 const more = async (cmd: string, row: NodeRow) => {
     if (cmd === 'test') {
         await testNode(props.kind, row.id);
+        invalidateNodeCache();
         ElMessage.success(t('pro.node.testOk'));
         search(true);
+    } else if (cmd === 'joinCmd') {
+        await showPendingJoinCmd(row);
+    } else if (cmd === 'upgrade') {
+        await upgradeOne(row);
     } else if (cmd === 'restart') {
         await ElMessageBox.confirm(t('pro.node.restartConfirm'), t('pro.node.restart'), { type: 'warning' });
         await restartNode(row.id);
         ElMessage.success(t('pro.node.restartOk'));
     } else if (cmd === 'open') {
-        const entrance = row.securityEntrance ? '/' + row.securityEntrance : '';
-        window.open(`${row.protocol || 'http'}://${row.addr}:${row.port}${entrance}`, '_blank');
+        openPanelBookmark(row);
     }
 };
 
@@ -487,6 +688,11 @@ onBeforeUnmount(() => {
     flex-wrap: wrap;
     gap: 8px;
     margin-bottom: 12px;
+}
+.left {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
 }
 .right {
     display: flex;

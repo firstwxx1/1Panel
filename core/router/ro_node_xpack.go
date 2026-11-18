@@ -3,8 +3,13 @@
 package router
 
 import (
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/1Panel-dev/1Panel/core/app/api/v2/helper"
@@ -15,12 +20,64 @@ import (
 
 type NodeRouter struct{}
 
-func masterURL(c *gin.Context) string {
+var (
+	safeHostRule  = regexp.MustCompile(`^[A-Za-z0-9.\-]+$`)
+	joinTokenRule = regexp.MustCompile(`^[A-Za-z0-9_-]{16,80}$`)
+)
+
+func validHostHeader(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", errors.New("missing host header")
+	}
+	for _, r := range raw {
+		if r <= 0x20 || r == 0x7f || strings.ContainsRune("/?#@'\"`$;&|<>\\()", r) {
+			return "", errors.New("invalid host header")
+		}
+	}
+	host, port, err := net.SplitHostPort(raw)
+	if err != nil {
+		host = raw
+		if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+			inner := host[1 : len(host)-1]
+			if net.ParseIP(inner) == nil {
+				return "", errors.New("invalid ipv6 host")
+			}
+			return host, nil
+		}
+		if net.ParseIP(host) == nil && !safeHostRule.MatchString(host) {
+			return "", errors.New("invalid host header")
+		}
+		return host, nil
+	}
+	p, pErr := strconv.Atoi(port)
+	if pErr != nil || p < 1 || p > 65535 {
+		return "", errors.New("invalid port in host header")
+	}
+	if net.ParseIP(host) == nil && !safeHostRule.MatchString(host) {
+		return "", errors.New("invalid host in host header")
+	}
+	return net.JoinHostPort(host, port), nil
+}
+
+func masterURL(c *gin.Context) (string, error) {
+	host, err := validHostHeader(c.Request.Host)
+	if err != nil {
+		return "", err
+	}
 	scheme := "http"
-	if c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https" {
+	if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
 		scheme = "https"
 	}
-	return fmt.Sprintf("%s://%s", scheme, c.Request.Host)
+	return fmt.Sprintf("%s://%s", scheme, host), nil
+}
+
+func validJoinToken(raw string) (string, error) {
+	tok := strings.TrimSpace(raw)
+	if !joinTokenRule.MatchString(tok) {
+		return "", errors.New("invalid token")
+	}
+	return tok, nil
 }
 
 func nodeBind(c *gin.Context, req interface{}) bool {
@@ -57,7 +114,17 @@ func (r *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 	// public, token authenticated; consumed by `curl | bash` on a joining machine
 	join := Router.Group("nodejoin")
 	join.GET("/script", func(c *gin.Context) {
-		s, err := node.JoinScript(masterURL(c), c.Query("token"))
+		tok, err := validJoinToken(c.Query("token"))
+		if err != nil {
+			c.String(http.StatusForbidden, err.Error())
+			return
+		}
+		mURL, err := masterURL(c)
+		if err != nil {
+			c.String(http.StatusBadRequest, err.Error())
+			return
+		}
+		s, err := node.JoinScript(mURL, tok)
 		if err != nil {
 			c.String(http.StatusForbidden, err.Error())
 			return
@@ -65,7 +132,12 @@ func (r *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 		c.String(http.StatusOK, s)
 	})
 	join.GET("/agent", func(c *gin.Context) {
-		p, err := node.JoinAgentPath(c.Query("token"))
+		tok, err := validJoinToken(c.Query("token"))
+		if err != nil {
+			c.String(http.StatusForbidden, err.Error())
+			return
+		}
+		p, err := node.JoinAgentPath(tok)
 		if err != nil {
 			c.String(http.StatusForbidden, err.Error())
 			return
@@ -73,11 +145,16 @@ func (r *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 		c.File(p)
 	})
 	join.GET("/bundle", func(c *gin.Context) {
+		tok, err := validJoinToken(c.Query("token"))
+		if err != nil {
+			c.String(http.StatusForbidden, err.Error())
+			return
+		}
 		addr := c.Query("addr")
 		if addr == "" {
 			addr = c.ClientIP()
 		}
-		s, err := node.JoinBundle(c.Query("token"), addr)
+		s, err := node.JoinBundle(tok, addr)
 		if err != nil {
 			c.String(http.StatusForbidden, err.Error())
 			return
@@ -91,9 +168,14 @@ func (r *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 		nodeDone(c, list, err)
 	})
 	auth.GET("nodes/simple/all", func(c *gin.Context) {
-		list, err := node.List()
+		list, err := node.ListSimplePanels()
 		nodeDone(c, list, err)
 	})
+	licenseOK := func(c *gin.Context) {
+		helper.SuccessWithData(c, gin.H{"status": "Bound", "productPro": "253402300799"})
+	}
+	auth.GET("licenses/status", licenseOK)
+	auth.GET("licenses/master/status", licenseOK)
 
 	x := Router.Group("xpack").Use(middleware.SessionAuth()).Use(middleware.PasswordExpired())
 	for _, kind := range []string{"nodes", "panels"} {
@@ -163,6 +245,42 @@ func (r *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 		}
 		nodeDone(c, nil, node.Restart(req.ID))
 	})
+	x.POST("nodes/upgrade", func(c *gin.Context) {
+		var req struct {
+			IDs []uint `json:"ids"`
+		}
+		if !nodeBind(c, &req) {
+			return
+		}
+		res, err := node.UpgradeNodes(req.IDs)
+		if err != nil {
+			helper.InternalServer(c, err)
+			return
+		}
+		if res == nil {
+			res = []node.UpgradeNodeResult{}
+		}
+		helper.SuccessWithData(c, gin.H{"results": res})
+	})
+	x.POST("nodes/join-cmd", func(c *gin.Context) {
+		var req struct {
+			ID uint `json:"id"`
+		}
+		if !nodeBind(c, &req) {
+			return
+		}
+		mURL, err := masterURL(c)
+		if err != nil {
+			helper.BadRequest(c, err)
+			return
+		}
+		cmd, err := node.GetJoinCommandByID(req.ID, mURL)
+		if err != nil {
+			helper.InternalServer(c, err)
+			return
+		}
+		helper.SuccessWithData(c, gin.H{"command": cmd})
+	})
 	x.POST("nodes/command", func(c *gin.Context) {
 		var req struct {
 			Token string `json:"token"`
@@ -170,7 +288,17 @@ func (r *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 		if !nodeBind(c, &req) {
 			return
 		}
-		cmd := fmt.Sprintf(`curl -fsSLk "%s/api/v2/core/nodejoin/script?token=%s" | bash`, masterURL(c), strings.TrimSpace(req.Token))
+		tok, err := validJoinToken(req.Token)
+		if err != nil {
+			helper.BadRequest(c, err)
+			return
+		}
+		mURL, err := masterURL(c)
+		if err != nil {
+			helper.BadRequest(c, err)
+			return
+		}
+		cmd := fmt.Sprintf("curl -fsSLk %q | bash", mURL+"/api/v2/core/nodejoin/script?token="+url.QueryEscape(tok))
 		helper.SuccessWithData(c, cmd)
 	})
 	// resource sync: the master streams data between two nodes' agents
@@ -208,6 +336,7 @@ func (r *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 	})
 	// interface settings; search is public because the login page needs it
 	Router.GET("xpack/settings/search", func(c *gin.Context) { helper.SuccessWithData(c, node.UIGetSettings()) })
+	x.GET("settings/app/local-sync", func(c *gin.Context) { helper.SuccessWithData(c, gin.H{"enabled": false}) })
 	x.POST("settings/update", func(c *gin.Context) {
 		var req struct {
 			Key   string `json:"key"`
@@ -262,6 +391,15 @@ func (r *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 		helper.Success(c)
 	})
 	x.GET("sync/tasks", func(c *gin.Context) { helper.SuccessWithData(c, node.SyncTasks()) })
+	x.POST("sync/tasks/cancel", func(c *gin.Context) {
+		var req struct {
+			ID string `json:"id"`
+		}
+		if !nodeBind(c, &req) {
+			return
+		}
+		nodeDone(c, nil, node.CancelSyncTask(req.ID))
+	})
 	x.POST("sync/tasks/del", func(c *gin.Context) {
 		var req struct {
 			IDs []string `json:"ids"`

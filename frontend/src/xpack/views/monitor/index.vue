@@ -3,7 +3,7 @@
         <el-tabs v-model="activeTab" type="card" class="mb-3">
             <el-tab-pane v-for="tab in tabs" :key="tab.key" :label="$t('pro.monitor.' + tab.key)" :name="tab.key" />
         </el-tabs>
-        <component :is="current" :key="activeTab" :sites="sites" @changed="loadSites" />
+        <component :is="current" :key="`${activeTab}-${globalStore.currentNode}`" :sites="sites" @changed="loadSites" />
     </div>
 </template>
 

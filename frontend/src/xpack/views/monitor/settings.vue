@@ -1,102 +1,117 @@
 <template>
-    <el-card shadow="never" v-loading="loading">
-        <div class="mb-3">
-            <el-radio-group v-model="scope">
-                <el-radio-button value="global">{{ $t('pro.monitor.globalSettings') }}</el-radio-button>
-                <el-radio-button value="site">{{ $t('pro.monitor.siteSettings') }}</el-radio-button>
-            </el-radio-group>
-        </div>
-        <div v-if="cfg" class="form">
-            <template v-if="scope === 'global'">
-                <div class="row">
-                    <span class="label">{{ $t('pro.monitor.state') }}</span>
-                    <el-switch :model-value="cfg.enabled" @change="toggleGlobal" />
-                </div>
-                <div v-for="f in numberFields" :key="f.key" class="row">
-                    <span class="label">{{ f.label }}</span>
-                    <el-input :model-value="String((cfg as any)[f.key])" readonly class="field">
-                        <template #append>
-                            <el-button :icon="Setting" @click="edit(f, 'global')">{{ $t('pro.monitor.set') }}</el-button>
-                        </template>
-                    </el-input>
-                    <div class="hint">{{ f.hint }}</div>
-                </div>
-                <div v-for="f in listFields" :key="f.key" class="row">
-                    <span class="label">{{ f.label }}</span>
-                    <el-input :model-value="join((cfg as any)[f.key])" readonly class="field">
-                        <template #append>
-                            <el-button :icon="Setting" @click="edit(f, 'global')">{{ $t('pro.monitor.set') }}</el-button>
-                        </template>
-                    </el-input>
-                    <div class="hint">{{ f.hint }}</div>
-                </div>
-                <div class="row">
-                    <span class="label">{{ $t('pro.monitor.cdn') }}</span>
-                    <el-switch v-model="cfg.cdn" @change="save" />
-                    <div class="hint">{{ $t('pro.monitor.cdnHelp') }}</div>
-                </div>
-                <div class="row">
-                    <span class="label">{{ $t('pro.monitor.rtTitle') }}</span>
-                    <el-tag v-if="hasRt" type="success" effect="light">{{ $t('pro.monitor.rtOn') }}</el-tag>
-                    <el-button v-else type="primary" plain @click="enableRt">{{ $t('pro.monitor.rtEnable') }}</el-button>
-                    <div v-if="!hasRt" class="hint">{{ $t('pro.monitor.rtOff') }}</div>
-                </div>
-            </template>
-            <template v-else>
-                <div class="row">
-                    <span class="label">{{ $t('pro.monitor.website') }}</span>
-                    <SiteSelect v-model="site" :sites="siteList" />
-                </div>
-                <template v-if="site">
+    <div>
+        <NodeTargetBar v-model="targetNode" @change="onNodeChange" />
+        <el-card shadow="never" v-loading="loading">
+            <div class="mb-3">
+                <el-radio-group v-model="scope">
+                    <el-radio-button value="global">{{ $t('pro.monitor.globalSettings') }}</el-radio-button>
+                    <el-radio-button value="site">{{ $t('pro.monitor.siteSettings') }}</el-radio-button>
+                </el-radio-group>
+            </div>
+            <div v-if="cfg" class="form">
+                <template v-if="scope === 'global'">
                     <div class="row">
                         <span class="label">{{ $t('pro.monitor.state') }}</span>
-                        <el-switch v-model="cfg.sites[site]" :disabled="!cfg.enabled" @change="save" />
-                        <div v-if="!cfg.enabled" class="hint">{{ $t('pro.monitor.needGlobal') }}</div>
+                        <el-switch :model-value="cfg.enabled" @change="toggleGlobal" />
+                    </div>
+                    <div v-for="f in numberFields" :key="f.key" class="row">
+                        <span class="label">{{ f.label }}</span>
+                        <el-input :model-value="String((cfg as any)[f.key])" readonly class="field">
+                            <template #append>
+                                <el-button :icon="Setting" @click="edit(f, 'global')">{{ $t('pro.monitor.set') }}</el-button>
+                            </template>
+                        </el-input>
+                        <div class="hint">{{ f.hint }}</div>
                     </div>
                     <div v-for="f in listFields" :key="f.key" class="row">
                         <span class="label">{{ f.label }}</span>
-                        <el-input :model-value="join(rules[f.key])" readonly class="field">
+                        <el-input :model-value="join((cfg as any)[f.key])" readonly class="field">
                             <template #append>
-                                <el-button :icon="Setting" @click="edit(f, 'site')">{{ $t('pro.monitor.set') }}</el-button>
+                                <el-button :icon="Setting" @click="edit(f, 'global')">{{ $t('pro.monitor.set') }}</el-button>
                             </template>
                         </el-input>
-                        <div class="hint">{{ $t('pro.monitor.siteExtra') }}</div>
+                        <div class="hint">{{ f.hint }}</div>
                     </div>
                     <div class="row">
                         <span class="label">{{ $t('pro.monitor.cdn') }}</span>
-                        <el-switch v-model="rules.cdn" @change="save" />
+                        <el-switch v-model="cfg.cdn" @change="save" />
+                        <div class="hint">{{ $t('pro.monitor.cdnHelp') }}</div>
                     </div>
                     <div class="row">
-                        <span class="label">{{ $t('pro.monitor.clearSite') }}</span>
-                        <el-button type="danger" plain @click="clear">{{ $t('pro.monitor.clearLog') }}</el-button>
+                        <span class="label">{{ $t('pro.monitor.rtTitle') }}</span>
+                        <el-tag v-if="hasRt" type="success" effect="light">{{ $t('pro.monitor.rtOn') }}</el-tag>
+                        <el-button v-else type="primary" plain @click="enableRt">{{ $t('pro.monitor.rtEnable') }}</el-button>
+                        <div v-if="!hasRt" class="hint">{{ $t('pro.monitor.rtOff') }}</div>
                     </div>
                 </template>
-                <el-empty v-else :image-size="48" :description="$t('pro.monitor.noSite')" />
-            </template>
-        </div>
+                <template v-else>
+                    <div class="row">
+                        <span class="label">{{ $t('pro.monitor.website') }}</span>
+                        <SiteSelect v-model="site" :sites="siteList" />
+                    </div>
+                    <template v-if="site">
+                        <div class="row">
+                            <span class="label">{{ $t('pro.monitor.state') }}</span>
+                            <el-switch v-model="cfg.sites[site]" :disabled="!cfg.enabled" @change="save" />
+                            <div v-if="!cfg.enabled" class="hint">{{ $t('pro.monitor.needGlobal') }}</div>
+                        </div>
+                        <div v-for="f in listFields" :key="f.key" class="row">
+                            <span class="label">{{ f.label }}</span>
+                            <el-input :model-value="join(rules[f.key])" readonly class="field">
+                                <template #append>
+                                    <el-button :icon="Setting" @click="edit(f, 'site')">{{ $t('pro.monitor.set') }}</el-button>
+                                </template>
+                            </el-input>
+                            <div class="hint">{{ $t('pro.monitor.siteExtra') }}</div>
+                        </div>
+                        <div class="row">
+                            <span class="label">{{ $t('pro.monitor.cdn') }}</span>
+                            <el-switch v-model="rules.cdn" @change="save" />
+                        </div>
+                        <div class="row">
+                            <span class="label">{{ $t('pro.monitor.clearSite') }}</span>
+                            <el-button type="danger" plain @click="clear">{{ $t('pro.monitor.clearLog') }}</el-button>
+                        </div>
+                    </template>
+                    <el-empty v-else :image-size="48" :description="$t('pro.monitor.noSite')" />
+                </template>
+            </div>
 
-        <el-dialog v-model="dialog" :title="editing?.label" width="480px">
-            <el-input-number v-if="editing?.kind === 'number'" v-model="numText" :min="1" :step="editing.step" style="width: 100%" />
-            <el-input v-else v-model="text" type="textarea" :rows="6" />
-            <div class="hint">{{ editing?.help }}</div>
-            <template #footer>
-                <el-button @click="dialog = false">{{ $t('commons.button.cancel') }}</el-button>
-                <el-button type="primary" @click="commit">{{ $t('commons.button.confirm') }}</el-button>
-            </template>
-        </el-dialog>
-    </el-card>
+            <el-dialog v-model="dialog" :title="editing?.label" width="480px">
+                <el-input-number v-if="editing?.kind === 'number'" v-model="numText" :min="1" :step="editing.step" style="width: 100%" />
+                <el-input v-else v-model="text" type="textarea" :rows="6" />
+                <div class="hint-dialog">{{ editing?.help }}</div>
+                <template #footer>
+                    <el-button @click="dialog = false">{{ $t('commons.button.cancel') }}</el-button>
+                    <el-button type="primary" @click="commit">{{ $t('commons.button.confirm') }}</el-button>
+                </template>
+            </el-dialog>
+        </el-card>
+    </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { Setting } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { GlobalStore } from '@/store';
+import NodeTargetBar from '@/xpack/components/NodeTargetBar.vue';
 import SiteSelect from './SiteSelect.vue';
-import { monClear, monEnableRt, monGetSettings, monSaveSettings, MonRules, MonSettings, MonSiteItem } from '@/xpack/api/monitor';
+import {
+    monClear,
+    monEnableRt,
+    monGetSettings,
+    monSaveSettings,
+    MonRules,
+    MonSettings,
+    MonSiteItem,
+} from '@/xpack/api/monitor';
 import i18n from '@/lang';
 
 const emit = defineEmits(['changed']);
 const t = i18n.global.t;
+const globalStore = GlobalStore();
+const targetNode = ref(globalStore.currentNode || 'local');
 const loading = ref(false);
 const scope = ref<'global' | 'site'>('global');
 const cfg = ref<MonSettings | null>(null);
@@ -111,7 +126,6 @@ interface Field {
     help?: string;
     hint?: string;
     step?: number;
-    sep?: RegExp;
 }
 const numberFields = computed<Field[]>(() => [
     { key: 'retentionDays', label: t('pro.monitor.retention'), kind: 'number', step: 1, hint: t('pro.monitor.retentionHelp') },
@@ -126,7 +140,6 @@ const listFields = computed<Field[]>(() => [
 ]);
 
 const empty = (): MonRules => ({ excludeStatus: [], excludeSuffix: [], excludeUri: [], excludeIps: [], excludeUa: [], cdn: false });
-// the rules object the site view edits; created on first use
 const rules = computed<any>(() => {
     if (!cfg.value || !site.value) return empty();
     if (!cfg.value.siteRules) cfg.value.siteRules = {};
@@ -138,7 +151,7 @@ const join = (l?: string[]) => (l || []).join(',');
 const load = async () => {
     loading.value = true;
     try {
-        const d = (await monGetSettings()).data;
+        const d = (await monGetSettings(targetNode.value)).data;
         siteList.value = d.siteList || [];
         hasRt.value = d.hasRt;
         d.sites = d.sites || {};
@@ -147,21 +160,32 @@ const load = async () => {
             (d as any)[k] = d[k] || [];
         }
         cfg.value = d;
-        if (!site.value && siteList.value.length) site.value = siteList.value[0].alias;
+        if (!site.value || !siteList.value.some((s) => s.alias === site.value)) {
+            site.value = siteList.value[0]?.alias || '';
+        }
+    } catch {
+        cfg.value = null;
+        siteList.value = [];
     } finally {
         loading.value = false;
     }
 };
 
+const onNodeChange = () => {
+    site.value = '';
+    load();
+};
+
 const save = async (tip: any = true) => {
     if (!cfg.value) return;
     const { siteList: _s, hasRt: _h, ...rest } = cfg.value;
-    // drop empty per-site rule sets
     const sr: Record<string, MonRules> = {};
     for (const [k, v] of Object.entries(rest.siteRules || {})) {
-        if (v.excludeStatus.length || v.excludeSuffix.length || v.excludeUri.length || v.excludeIps.length || v.excludeUa.length || v.cdn) sr[k] = v;
+        if (v.excludeStatus.length || v.excludeSuffix.length || v.excludeUri.length || v.excludeIps.length || v.excludeUa.length || v.cdn) {
+            sr[k] = v;
+        }
     }
-    await monSaveSettings({ ...rest, siteRules: sr });
+    await monSaveSettings({ ...rest, siteRules: sr }, targetNode.value);
     if (tip) ElMessage.success(t('pro.monitor.saved'));
     emit('changed');
 };
@@ -201,13 +225,13 @@ const commit = async () => {
 };
 
 const enableRt = async () => {
-    await monEnableRt();
+    await monEnableRt(targetNode.value);
     ElMessage.success(t('pro.monitor.rtOk'));
     load();
 };
 const clear = async () => {
     await ElMessageBox.confirm(t('pro.monitor.clearConfirm'), t('pro.monitor.clearLog'), { type: 'warning' });
-    await monClear(site.value);
+    await monClear(site.value, targetNode.value);
     ElMessage.success(t('pro.monitor.saved'));
 };
 onMounted(load);
@@ -232,6 +256,11 @@ onMounted(load);
     width: 100%;
     margin-left: 192px;
     margin-top: -10px;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+}
+.hint-dialog {
+    margin-top: 8px;
     font-size: 12px;
     color: var(--el-text-color-secondary);
 }

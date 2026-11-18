@@ -48,7 +48,7 @@
                 <template #description>
                     <span class="input-help">
                         {{ $t('setting.releaseHelper') }}
-                        <el-link class="pageRoute" icon="Position" type="primary">
+                        <el-link class="pageRoute" icon="Position" type="primary" @click="openGithubReleases">
                             {{ $t('firewall.quickJump') }}
                         </el-link>
                     </span>
@@ -67,7 +67,7 @@
 import MarkDownEditor from '@/components/mkdown-editor/index.vue';
 
 import { getSettingBaseInfo, listReleases, updateSetting } from '@/api/modules/setting';
-import { ref } from 'vue';
+import { reactive, ref } from 'vue';
 import { FormInstance } from 'element-plus';
 import { MsgSuccess } from '@/utils/message';
 import i18n from '@/lang';
@@ -123,14 +123,19 @@ const handleClose = () => {
     drawerVisible.value = false;
 };
 
+const openGithubReleases = () => {
+    window.open('https://github.com/1Panel-dev/1Panel/releases', '_blank', 'noopener,noreferrer');
+};
+
 const search = async () => {
     loading.value = true;
-    await listReleases()
+    await listReleases(true)
         .then((res) => {
             notes.value = res.data || [];
             loading.value = false;
         })
         .catch(() => {
+            notes.value = [];
             loading.value = false;
         });
 };

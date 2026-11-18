@@ -62,11 +62,19 @@
                             v-else
                             text
                             class="terminal-connection-item"
-                            :disabled="connecting"
+                            :disabled="connecting || Boolean(data.node && data.node.status !== 'Healthy')"
                             :title="data.node ? `${data.label} (${data.node.addr})` : data.label"
                             @click.stop="connectItem(data)"
                         >
                             <span class="terminal-connection-label">{{ data.label }}</span>
+                            <el-tag
+                                v-if="data.node && data.node.status !== 'Healthy'"
+                                size="small"
+                                type="danger"
+                                effect="plain"
+                            >
+                                {{ data.node.status }}
+                            </el-tag>
                             <span v-if="data.node" class="terminal-connection-address">
                                 {{ data.node.addr }}
                             </span>
@@ -91,7 +99,6 @@ import i18n from '@/lang';
 import { listNodeOptions } from '@/api/modules/setting';
 import { getHostTree, testByID, testLocalConn } from '@/api/modules/terminal';
 import { useGlobalStore } from '@/composables/useGlobalStore';
-import { MsgError } from '@/utils/message';
 import type { Host } from '@/api/interface/host';
 import type { Setting } from '@/api/interface/setting';
 import HostDialog from '@/components/terminal/host-create.vue';
@@ -211,11 +218,7 @@ const connect = async (wsID: number, title: string, nodeName?: string) => {
         if (wsID === 0) {
             const res = await testLocalConn(targetNode);
             if (!res.data) {
-                if (!nodeName) {
-                    hostDialogRef.value?.acceptParams({ isLocal: true, nodeName: targetNode });
-                } else {
-                    MsgError(`${title}: ${i18n.global.t('terminal.connLocalErr')}`);
-                }
+                hostDialogRef.value?.acceptParams({ isLocal: true, nodeName: targetNode });
                 return;
             }
             await props.openSession({

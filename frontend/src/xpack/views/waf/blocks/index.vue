@@ -4,6 +4,9 @@
             <div class="actions">
                 <div class="left">
                     <el-button @click="clearAll">{{ $t('pro.waf.clearLogs') }}</el-button>
+                    <el-button :disabled="!selectedBlocking.length" type="primary" plain @click="unblock(selectedBlocking)">
+                        {{ $t('pro.waf.batchUnblock') }}
+                    </el-button>
                     <el-button :disabled="!selected.length" @click="blockSelected">{{ $t('pro.waf.batchBlockIp') }}</el-button>
                     <el-button @click="rangeDialog = true">{{ $t('pro.waf.batchBlockRange') }}</el-button>
                     <el-button plain type="primary" @click="exportCsv">{{ $t('pro.waf.exportLogs') }}</el-button>
@@ -26,7 +29,7 @@
 
             <el-table :data="items" v-loading="loading" size="small" @selection-change="(v: WafBlockNode[]) => (selected = v)">
                 <el-table-column type="selection" width="45" />
-                <el-table-column v-if="isMaster" prop="node" :label="$t('xpack.monitor.node')" min-width="110" show-overflow-tooltip>
+                <el-table-column v-if="isMaster" prop="node" :label="$t('pro.monitor.node')" min-width="110" show-overflow-tooltip>
                     <template #default="{ row }">{{ row.node || '-' }}</template>
                 </el-table-column>
                 <el-table-column prop="ip" label="IP" min-width="140" />
@@ -40,6 +43,11 @@
                 </el-table-column>
                 <el-table-column :label="$t('pro.waf.blockDuration')" width="120">
                     <template #default="{ row }">{{ humanTime(row.blockingTime) }}</template>
+                </el-table-column>
+                <el-table-column :label="$t('pro.waf.remaining')" width="130">
+                    <template #default="{ row }">
+                        {{ row.status === 'blocking' && row.remaining > 0 ? formatRemaining(row.remaining) : '-' }}
+                    </template>
                 </el-table-column>
                 <el-table-column :label="$t('pro.waf.region')" min-width="120">
                     <template #default="{ row }">{{ [row.country, row.province].filter(Boolean).join(' ') }}</template>
@@ -97,7 +105,7 @@ import {
     WafBlockNode,
     WafBlockQuery,
 } from '@/xpack/api/waf';
-import { isMasterView, nodeQuery } from '@/xpack/api/aggregate';
+import { isMasterView, nodeExec } from '@/xpack/api/aggregate';
 
 const { t, te } = useI18n();
 const query = reactive<WafBlockQuery>({ ip: '', page: 1, size: 20 });
@@ -105,6 +113,7 @@ const items = ref<WafBlockNode[]>([]);
 const total = ref(0);
 const loading = ref(false);
 const selected = ref<WafBlockNode[]>([]);
+const selectedBlocking = computed(() => selected.value.filter((r) => r.status === 'blocking'));
 const isMaster = computed(() => isMasterView());
 const rangeDialog = ref(false);
 const range = ref('');
@@ -124,6 +133,21 @@ const humanTime = (sec: number) => {
     return `${sec}${t('pro.waf.second')}`;
 };
 
+const formatRemaining = (sec: number) => {
+    if (!sec || sec <= 0) return '-';
+    if (sec >= 3600) {
+        const h = Math.floor(sec / 3600);
+        const m = Math.floor((sec % 3600) / 60);
+        return m > 0 ? `${h}${t('pro.waf.hour')} ${m}${t('pro.waf.minute')}` : `${h}${t('pro.waf.hour')}`;
+    }
+    if (sec >= 60) {
+        const m = Math.floor(sec / 60);
+        const s = sec % 60;
+        return s > 0 ? `${m}${t('pro.waf.minute')} ${s}${t('pro.waf.second')}` : `${m}${t('pro.waf.minute')}`;
+    }
+    return `${sec}${t('pro.waf.second')}`;
+};
+
 const search = async () => {
     loading.value = true;
     try {
@@ -135,8 +159,8 @@ const search = async () => {
     }
 };
 
-// unblock/blacklist writes go back to the node the row came from (aggregated master view)
 const unblock = async (rows: WafBlockNode[]) => {
+    if (!rows.length) return;
     const groups = new Map<string, string[]>();
     for (const r of rows) {
         const n = r.node || '';
@@ -144,7 +168,7 @@ const unblock = async (rows: WafBlockNode[]) => {
     }
     for (const [node, ips] of groups) {
         if (node) {
-            await nodeQuery(node, '/xpack/waf/blocks/remove', { ips });
+            await nodeExec(node, '/xpack/waf/blocks/remove', { ips });
         } else {
             await removeWafBlocks(ips);
         }
@@ -157,7 +181,7 @@ const blockSelected = async () => {
     for (const row of selected.value) {
         const rule = { state: 'on', name: row.ip, rule: row.ip, type: 'ipv4' };
         if (row.node) {
-            await nodeQuery(row.node, '/xpack/waf/rules/save', { name: 'ipBlack', site: '', rule, oldId: '' });
+            await nodeExec(row.node, '/xpack/waf/rules/save', { name: 'ipBlack', site: '', rule, oldId: '' });
         } else {
             await saveWafRule('ipBlack', '', rule, '');
         }
@@ -168,7 +192,7 @@ const blockSelected = async () => {
 const addBlack = async (row: WafBlockNode) => {
     const rule = { state: 'on', name: row.ip, rule: row.ip, type: 'ipv4' };
     if (row.node) {
-        await nodeQuery(row.node, '/xpack/waf/rules/save', { name: 'ipBlack', site: '', rule, oldId: '' });
+        await nodeExec(row.node, '/xpack/waf/rules/save', { name: 'ipBlack', site: '', rule, oldId: '' });
     } else {
         await saveWafRule('ipBlack', '', rule, '');
     }
@@ -202,11 +226,11 @@ const exportCsv = async () => {
     if (isMaster.value) {
         const res = await listWafBlocksAgg({ ...query, page: 1, size: 5000 });
         const csv = (v: any) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
-        const head = ['blockedAt', 'node', 'ip', 'status', 'blockingTime', 'country', 'province', 'rule'];
+        const head = ['blockedAt', 'node', 'ip', 'status', 'blockingTime', 'remaining', 'country', 'province', 'rule'];
         const lines = res.items.map((r) =>
-            [r.blockedAt, r.node, r.ip, r.status, r.blockingTime, r.country, r.province, r.rule].map(csv).join(','),
+            [r.blockedAt, r.node, r.ip, r.status, r.blockingTime, r.remaining, r.country, r.province, r.rule].map(csv).join(','),
         );
-        const blob = new Blob(['﻿' + head.join(',') + '\n' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+        const blob = new Blob(['\ufeff' + head.join(',') + '\n' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = 'waf-block.csv';
@@ -240,7 +264,14 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
     margin-bottom: 12px;
+}
+.left {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
 }
 .right {
     display: flex;

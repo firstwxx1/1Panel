@@ -40,7 +40,7 @@
 
             <el-table :data="items" v-loading="loading" size="small" @selection-change="(v: WafLogNode[]) => (selected = v)">
                 <el-table-column type="selection" width="45" />
-                <el-table-column v-if="isMaster" prop="node" :label="$t('xpack.monitor.node')" min-width="110" show-overflow-tooltip>
+                <el-table-column v-if="isMaster" prop="node" :label="$t('pro.monitor.node')" min-width="110" show-overflow-tooltip>
                     <template #default="{ row }">{{ row.node || '-' }}</template>
                 </el-table-column>
                 <el-table-column prop="ip" label="IP" min-width="130" />
@@ -125,7 +125,7 @@ import {
     WafLogOptions,
     WafLogQuery,
 } from '@/xpack/api/waf';
-import { isMasterView, nodeQuery } from '@/xpack/api/aggregate';
+import { isMasterView, nodeExec } from '@/xpack/api/aggregate';
 
 const { t, te } = useI18n();
 const query = reactive<WafLogQuery>({ website: '', ruleType: '', action: '', host: '', url: '', ip: '', location: '', page: 1, size: 20 });
@@ -157,6 +157,7 @@ const ruleLabel = (key: string) => {
 const actionType = (action: string) => {
     if (action === 'deny') return 'danger';
     if (action === 'allow') return 'success';
+    if (action === 'five_seconds' || action === 'captcha') return 'primary';
     if (action === 'observe') return 'warning';
     return 'info';
 };
@@ -184,7 +185,7 @@ const openDetail = (row: WafLogNode) => (detail.value = row);
 // routes the write back to the node the log came from
 const saveRule = (node: string, name: string, site: string, rule: object, oldId: string) =>
     node
-        ? nodeQuery(node, '/xpack/waf/rules/save', { name, site, rule, oldId })
+        ? nodeExec(node, '/xpack/waf/rules/save', { name, site, rule, oldId })
         : saveWafRule(name as any, site, rule as any, oldId);
 
 const addBlack = async (rule: string, node = '') => {

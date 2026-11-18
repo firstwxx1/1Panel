@@ -89,10 +89,10 @@ const toEdition = () => {
 
 const onLoadUpgradeInfo = async () => {
     loading.value = true;
-    await loadUpgradeInfo()
+    await loadUpgradeInfo(true)
         .then((res) => {
             loading.value = false;
-            if (res.data.testVersion || res.data.newVersion || res.data.latestVersion) {
+            if (res.data && (res.data.testVersion || res.data.newVersion || res.data.latestVersion)) {
                 upgradeInfo.value = res.data;
                 if (upgradeInfo.value.latestVersion) {
                     upgradeVersion.value = upgradeInfo.value.latestVersion;
@@ -109,6 +109,7 @@ const onLoadUpgradeInfo = async () => {
         })
         .catch(() => {
             loading.value = false;
+            MsgSuccess(i18n.global.t('setting.noUpgrade'));
         });
 };
 

@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/1Panel-dev/1Panel/core/app/repo"
 	"github.com/1Panel-dev/1Panel/core/utils/encrypt"
+	"gorm.io/gorm"
 )
 
 // Master certificate authority. Every child node trusts only this CA, and the master
@@ -77,29 +79,63 @@ func loadAuthority() (*authority, error) {
 		return caCached, nil
 	}
 	settings := repo.NewISettingRepo()
-	get := func(key string, secret bool) []byte {
-		v, _ := settings.GetValueByKey(key)
-		if v == "" {
-			return nil
+	readSetting := func(key string) (string, error) {
+		v, err := settings.GetValueByKey(key)
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", fmt.Errorf("read setting %s failed: %w", key, err)
 		}
-		if secret {
-			plain, err := encrypt.StringDecrypt(v)
-			if err != nil {
-				return nil
-			}
-			return []byte(plain)
-		}
-		return []byte(v)
+		return v, nil
 	}
-	caPEM, caKeyPEM := get(keyCACrt, false), get(keyCAKey, true)
-	clientCrt, clientKey := get(keyClientCrt, false), get(keyClientKey, true)
-	if len(caPEM) > 0 && len(caKeyPEM) > 0 && len(clientCrt) > 0 && len(clientKey) > 0 {
-		caCert, err1 := decodeCert(caPEM)
-		caKey, err2 := decodeKey(caKeyPEM)
-		if err1 == nil && err2 == nil {
-			caCached = &authority{caCrt: caCert, caKey: caKey, caPEM: caPEM, clientCrt: clientCrt, clientKey: clientKey}
-			return caCached, nil
+	rawCACrt, err := readSetting(keyCACrt)
+	if err != nil {
+		return nil, err
+	}
+	rawCAKey, err := readSetting(keyCAKey)
+	if err != nil {
+		return nil, err
+	}
+	rawClientCrt, err := readSetting(keyClientCrt)
+	if err != nil {
+		return nil, err
+	}
+	rawClientKey, err := readSetting(keyClientKey)
+	if err != nil {
+		return nil, err
+	}
+	if len(rawCACrt) > 0 || len(rawCAKey) > 0 || len(rawClientCrt) > 0 || len(rawClientKey) > 0 {
+		if len(rawCACrt) == 0 || len(rawCAKey) == 0 || len(rawClientCrt) == 0 || len(rawClientKey) == 0 {
+			return nil, errors.New("incomplete master CA credentials in settings")
 		}
+		caKeyPlain, err := encrypt.StringDecrypt(rawCAKey)
+		if err != nil || len(caKeyPlain) == 0 {
+			return nil, fmt.Errorf("decrypt master CA key failed: %w", err)
+		}
+		clientKeyPlain, err := encrypt.StringDecrypt(rawClientKey)
+		if err != nil || len(clientKeyPlain) == 0 {
+			return nil, fmt.Errorf("decrypt master client key failed: %w", err)
+		}
+		caCert, err := decodeCert([]byte(rawCACrt))
+		if err != nil {
+			return nil, fmt.Errorf("parse master CA cert failed: %w", err)
+		}
+		caKey, err := decodeKey([]byte(caKeyPlain))
+		if err != nil {
+			return nil, fmt.Errorf("parse master CA key failed: %w", err)
+		}
+		if _, err := decodeCert([]byte(rawClientCrt)); err != nil {
+			return nil, fmt.Errorf("parse master client cert failed: %w", err)
+		}
+		if _, err := decodeKey([]byte(clientKeyPlain)); err != nil {
+			return nil, fmt.Errorf("parse master client key failed: %w", err)
+		}
+		caCached = &authority{
+			caCrt:     caCert,
+			caKey:     caKey,
+			caPEM:     []byte(rawCACrt),
+			clientCrt: []byte(rawClientCrt),
+			clientKey: []byte(clientKeyPlain),
+		}
+		return caCached, nil
 	}
 
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -128,7 +164,7 @@ func loadAuthority() (*authority, error) {
 	if err != nil {
 		return nil, err
 	}
-	caKeyPEM, err = encodeKey(caKey)
+	caKeyPEM, err := encodeKey(caKey)
 	if err != nil {
 		return nil, err
 	}

@@ -34,12 +34,12 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
-import { monErrors } from '@/xpack/api/monitor';
+import { onMounted, ref, watch } from 'vue';
+import { monErrorsAgg, MonErrItem } from '@/xpack/api/monitor';
 
 const props = defineProps<{ site: string; range: string }>();
 const cls = ref('');
-const items = ref<any[]>([]);
+const items = ref<MonErrItem[]>([]);
 const total = ref(0);
 const page = ref(1);
 const size = ref(20);
@@ -54,9 +54,15 @@ const fmt = (ts: number) => {
 const load = async () => {
     loading.value = true;
     try {
-        const res = await monErrors({ site: props.site, range: props.range, class: cls.value, page: page.value, size: size.value });
-        items.value = res.data.items || [];
-        total.value = res.data.total;
+        const res = await monErrorsAgg({
+            site: props.site,
+            range: props.range,
+            class: cls.value,
+            page: page.value,
+            size: size.value,
+        });
+        items.value = res.items || [];
+        total.value = res.total;
     } finally {
         loading.value = false;
     }
@@ -65,6 +71,7 @@ const reload = () => {
     page.value = 1;
     load();
 };
+watch(() => [props.site, props.range], reload);
 onMounted(load);
 </script>
 

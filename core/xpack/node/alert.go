@@ -2,6 +2,7 @@ package node
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/1Panel-dev/1Panel/core/global"
+	"github.com/1Panel-dev/1Panel/core/utils/encrypt"
 )
 
 // Alerting: the master polls every node's agent, applies a small fixed rule set and
@@ -77,6 +79,11 @@ func loadAlertCfgLocked() *AlertConfig {
 	c := &AlertConfig{Interval: 60, CooldownMin: 30, Rules: map[string]AlertRule{}}
 	if b, err := os.ReadFile(path.Join(alertDir(), "config.json")); err == nil {
 		_ = json.Unmarshal(b, c)
+	}
+	if c.Telegram.Token != "" {
+		if dec, err := encrypt.StringDecrypt(c.Telegram.Token); err == nil && dec != "" && reBotTok.MatchString(dec) {
+			c.Telegram.Token = dec
+		}
 	}
 	if c.Rules == nil {
 		c.Rules = map[string]AlertRule{}
@@ -163,9 +170,20 @@ func SaveAlertConfig(in AlertConfig) error {
 	if err := os.MkdirAll(alertDir(), 0o700); err != nil {
 		return err
 	}
-	b, _ := json.MarshalIndent(in, "", "  ")
+	onDisk := in
+	if onDisk.Telegram.Token != "" {
+		encTok, err := encrypt.StringEncrypt(onDisk.Telegram.Token)
+		if err != nil {
+			return err
+		}
+		onDisk.Telegram.Token = encTok
+	}
+	b, _ := json.MarshalIndent(onDisk, "", "  ")
 	if err := os.WriteFile(path.Join(alertDir(), "config.json"), b, 0o600); err != nil {
 		return err
+	}
+	if c.Telegram.Proxy != in.Telegram.Proxy {
+		resetTGTransport()
 	}
 	*c = in
 	return nil
@@ -190,13 +208,44 @@ func ClearAlertRecords() {
 	_ = os.Remove(path.Join(alertDir(), "records.json"))
 }
 
-func tgClient(proxy string) *http.Client {
-	tr := &http.Transport{}
-	if proxy != "" {
-		if u, err := url.Parse(proxy); err == nil {
-			tr.Proxy = http.ProxyURL(u)
-		}
+var (
+	tgTransportMu    sync.Mutex
+	tgTransport      *http.Transport
+	tgTransportProxy string
+)
+
+func resetTGTransport() {
+	tgTransportMu.Lock()
+	if tgTransport != nil {
+		tgTransport.CloseIdleConnections()
+		tgTransport = nil
 	}
+	tgTransportProxy = ""
+	tgTransportMu.Unlock()
+}
+
+func tgClient(proxy string) *http.Client {
+	proxy = strings.TrimSpace(proxy)
+	tgTransportMu.Lock()
+	if tgTransport == nil || tgTransportProxy != proxy {
+		if tgTransport != nil {
+			tgTransport.CloseIdleConnections()
+		}
+		tr := &http.Transport{
+			MaxIdleConns:        10,
+			MaxIdleConnsPerHost: 5,
+			IdleConnTimeout:     60 * time.Second,
+		}
+		if proxy != "" {
+			if u, err := url.Parse(proxy); err == nil {
+				tr.Proxy = http.ProxyURL(u)
+			}
+		}
+		tgTransport = tr
+		tgTransportProxy = proxy
+	}
+	tr := tgTransport
+	tgTransportMu.Unlock()
 	return &http.Client{Transport: tr, Timeout: 15 * time.Second}
 }
 
@@ -248,35 +297,51 @@ func TestTelegram(in AlertTelegram) error {
 	return tgCall(tg, "sendMessage", map[string]interface{}{"chat_id": strings.TrimSpace(tg.ChatID), "text": "✅ 1Panel 告警通知测试：连接正常"}, nil)
 }
 
-// DiscoverChatIDs lists chats that recently messaged the bot, so the id need not be looked up by hand.
+// DiscoverChatIDs lists chats that recently interacted with the bot (messages, channel posts, or membership updates).
 func DiscoverChatIDs(in AlertTelegram) ([]map[string]string, error) {
 	tg := effectiveTelegram(in)
+	type tgChat struct {
+		ID       int64  `json:"id"`
+		Title    string `json:"title"`
+		Username string `json:"username"`
+		First    string `json:"first_name"`
+	}
+	type tgMsg struct {
+		Chat tgChat `json:"chat"`
+	}
 	var ups []struct {
-		Message struct {
-			Chat struct {
-				ID       int64  `json:"id"`
-				Title    string `json:"title"`
-				Username string `json:"username"`
-				First    string `json:"first_name"`
-			} `json:"chat"`
-		} `json:"message"`
+		Message           tgMsg `json:"message"`
+		EditedMessage     tgMsg `json:"edited_message"`
+		ChannelPost       tgMsg `json:"channel_post"`
+		EditedChannelPost tgMsg `json:"edited_channel_post"`
+		MyChatMember      tgMsg `json:"my_chat_member"`
 	}
 	if err := tgCall(tg, "getUpdates", map[string]interface{}{"limit": 50}, &ups); err != nil {
 		return nil, err
 	}
 	seen := map[int64]bool{}
 	out := []map[string]string{}
-	for _, u := range ups {
-		c := u.Message.Chat
+	addChat := func(c tgChat) {
 		if c.ID == 0 || seen[c.ID] {
-			continue
+			return
 		}
 		seen[c.ID] = true
 		name := c.Title
 		if name == "" {
-			name = strings.TrimSpace(c.First + " @" + c.Username)
+			if c.Username != "" {
+				name = strings.TrimSpace(c.First + " @" + c.Username)
+			} else {
+				name = strings.TrimSpace(c.First)
+			}
 		}
 		out = append(out, map[string]string{"id": fmt.Sprint(c.ID), "name": name})
+	}
+	for _, u := range ups {
+		addChat(u.Message.Chat)
+		addChat(u.EditedMessage.Chat)
+		addChat(u.ChannelPost.Chat)
+		addChat(u.EditedChannelPost.Chat)
+		addChat(u.MyChatMember.Chat)
 	}
 	return out, nil
 }
@@ -290,20 +355,30 @@ func fire(rule, node, key, msg string, once bool) {
 		alertMu.Unlock()
 		return
 	}
-	alertFired[key] = time.Now()
+	now := time.Now()
+	alertFired[key] = now
 	tg := c.Telegram
 	alertMu.Unlock()
 
-	rec := AlertRecord{Time: time.Now(), Rule: rule, Node: node, Message: msg}
+	rec := AlertRecord{Time: now, Rule: rule, Node: node, Message: msg}
+	sendFailed := false
 	if tg.Enabled && tg.Token != "" && tg.ChatID != "" {
 		text := fmt.Sprintf("🔔 [%s] %s", node, msg)
 		if err := tgCall(tg, "sendMessage", map[string]interface{}{"chat_id": tg.ChatID, "text": text}, nil); err != nil {
 			rec.Error = err.Error()
+			sendFailed = true
 		} else {
 			rec.Sent = true
 		}
 	}
 	alertMu.Lock()
+	if once && sendFailed {
+		if !seen {
+			delete(alertFired, key)
+		} else {
+			alertFired[key] = last
+		}
+	}
 	alertRecs = append(alertRecs, rec)
 	if len(alertRecs) > 500 {
 		alertRecs = alertRecs[len(alertRecs)-500:]
@@ -314,7 +389,11 @@ func fire(rule, node, key, msg string, once bool) {
 	alertMu.Unlock()
 }
 
-func init() { go alertLoop() }
+func alertAgentJSON(node, method, p string, in interface{}, out interface{}) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return agentJSONCtx(ctx, node, method, p, in, out)
+}
 
 func alertLoop() {
 	for global.DB == nil || global.CONF.Base.InstallDir == "" { // the database and config open after package init
@@ -358,11 +437,14 @@ func alertRound() {
 	if err != nil {
 		return
 	}
-	if r := ruleOf("node_offline"); r.Enabled {
-		for _, n := range nodes {
-			if n.Status == statusUnhealthy || n.Status == statusFailed {
-				fire("node_offline", n.Name, "offline|"+n.Name, "节点离线："+n.Name, false)
-			}
+	offlineEnabled := ruleOf("node_offline").Enabled
+	for _, n := range nodes {
+		if n.Status == statusHealthy {
+			alertMu.Lock()
+			delete(alertFired, "offline|"+n.Name)
+			alertMu.Unlock()
+		} else if offlineEnabled && (n.Status == statusUnhealthy || n.Status == statusFailed) {
+			fire("node_offline", n.Name, "offline|"+n.Name, "节点离线："+n.Name, false)
 		}
 	}
 	if r := ruleOf("sync_failed"); r.Enabled {
@@ -389,7 +471,7 @@ func alertNode(node string, since time.Time) {
 				ExpireDate    time.Time `json:"expireDate"`
 			} `json:"items"`
 		}
-		if agentJSON(node, http.MethodPost, "/websites/ssl/search", map[string]interface{}{"page": 1, "pageSize": 1000}, &res) == nil {
+		if alertAgentJSON(node, http.MethodPost, "/websites/ssl/search", map[string]interface{}{"page": 1, "pageSize": 1000}, &res) == nil {
 			for _, c := range res.Items {
 				if c.ExpireDate.Year() < 2000 {
 					continue
@@ -416,7 +498,7 @@ func alertNode(node string, since time.Time) {
 			Alias string `json:"alias"`
 			Err5  int64  `json:"err5"`
 		}
-		if agentJSON(node, http.MethodPost, "/xpack/monitor/sites", map[string]interface{}{"site": "", "start": day, "end": now.Unix() + 60}, &rows) == nil {
+		if alertAgentJSON(node, http.MethodPost, "/xpack/monitor/sites", map[string]interface{}{"site": "", "start": day, "end": now.Unix() + 60}, &rows) == nil {
 			for _, s := range rows {
 				if d := delta("5xx|"+node+"|"+s.Alias, s.Err5); r.Threshold > 0 && d >= int64(r.Threshold) {
 					fire("site_5xx", node, "5xx|"+node+"|"+s.Alias, fmt.Sprintf("网站 %s 最近一个周期出现 %d 个 5xx 错误", s.Alias, d), false)
@@ -436,7 +518,7 @@ func alertNode(node string, since time.Time) {
 			} `json:"items"`
 			Last int64 `json:"last"`
 		}
-		if agentJSON(node, http.MethodGet, fmt.Sprintf("/xpack/tamper/events/since?id=%d", last), nil, &res) == nil {
+		if alertAgentJSON(node, http.MethodGet, fmt.Sprintf("/xpack/tamper/events/since?id=%d", last), nil, &res) == nil {
 			if known { // the first poll only sets the watermark, so old events are not replayed
 				kinds := map[string]string{"modified": "被修改", "added": "新增文件", "deleted": "被删除"}
 				acts := map[string]string{"restored": "，已自动恢复", "quarantined": "，已隔离", "restore_failed": "，恢复失败"}
@@ -456,7 +538,7 @@ func alertNode(node string, since time.Time) {
 				AttackCount int64 `json:"attackCount"`
 			} `json:"today"`
 		}
-		if agentJSON(node, http.MethodGet, "/xpack/waf/overview", nil, &ov) == nil {
+		if alertAgentJSON(node, http.MethodGet, "/xpack/waf/overview", nil, &ov) == nil {
 			if d := delta("waf|"+node, ov.Today.AttackCount); r.Threshold > 0 && d >= int64(r.Threshold) {
 				fire("waf_attack", node, "waf|"+node, fmt.Sprintf("WAF 最近一个周期拦截 %d 次攻击", d), false)
 			}
@@ -469,10 +551,14 @@ func alertNode(node string, since time.Time) {
 				Status string `json:"status"`
 			} `json:"items"`
 		}
-		if agentJSON(node, http.MethodPost, "/apps/installed/search", map[string]interface{}{"page": 1, "pageSize": 500, "name": "", "type": "", "update": false, "sync": false}, &res) == nil {
+		if alertAgentJSON(node, http.MethodPost, "/apps/installed/search", map[string]interface{}{"page": 1, "pageSize": 500, "name": "", "type": "", "update": false, "sync": false}, &res) == nil {
 			for _, a := range res.Items {
 				if a.Status == "Error" || a.Status == "UnHealthy" {
 					fire("app_error", node, "app|"+node+"|"+a.Name, fmt.Sprintf("应用异常：%s（%s）", a.Name, a.Status), false)
+				} else {
+					alertMu.Lock()
+					delete(alertFired, "app|"+node+"|"+a.Name)
+					alertMu.Unlock()
 				}
 			}
 		}
@@ -484,7 +570,9 @@ func alertNode(node string, since time.Time) {
 				Name string `json:"name"`
 			} `json:"items"`
 		}
-		if agentJSON(node, http.MethodPost, "/cronjobs/search", map[string]interface{}{"page": 1, "pageSize": 500, "info": "", "orderBy": "createdAt", "order": "null", "groupIDs": []int{}}, &jobs) == nil {
+		if alertAgentJSON(node, http.MethodPost, "/cronjobs/search", map[string]interface{}{"page": 1, "pageSize": 500, "info": "", "orderBy": "createdAt", "order": "null", "groupIDs": []int{}}, &jobs) == nil {
+			endRFC := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
+			startRFC := since.Add(-time.Minute).Format(time.RFC3339)
 			for _, j := range jobs.Items {
 				var recs struct {
 					Items []struct {
@@ -492,9 +580,9 @@ func alertNode(node string, since time.Time) {
 						Message string `json:"message"`
 					} `json:"items"`
 				}
-				err := agentJSON(node, http.MethodPost, "/cronjobs/search/records", map[string]interface{}{
+				err := alertAgentJSON(node, http.MethodPost, "/cronjobs/search/records", map[string]interface{}{
 					"page": 1, "pageSize": 5, "cronjobID": j.ID, "status": "Failed",
-					"startTime": since.Add(-time.Minute).Format("2006-01-02 15:04:05"), "endTime": "2099-01-01 00:00:00",
+					"startTime": startRFC, "endTime": endRFC,
 				}, &recs)
 				if err != nil {
 					continue

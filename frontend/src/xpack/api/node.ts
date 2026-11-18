@@ -69,6 +69,13 @@ export interface NodeUpdate {
     apiKey?: string;
 }
 
+export interface NodeUpgradeResult {
+    id: number;
+    name: string;
+    ok: boolean;
+    message: string;
+}
+
 const base = (kind: 'nodes' | 'panels') => `/core/xpack/${kind}`;
 
 export const searchNodes = (kind: 'nodes' | 'panels', req: NodeSearch) =>
@@ -82,9 +89,19 @@ export const changeNodeGroup = (kind: 'nodes' | 'panels', ids: number[], groupID
 export const testNode = (kind: 'nodes' | 'panels', id: number) => http.post(`${base(kind)}/test`, { id });
 export const restartNode = (id: number) => http.post(`${base('nodes')}/restart`, { id });
 export const nodeJoinCommand = (token: string) => http.post<string>(`${base('nodes')}/command`, { token });
+export const getPendingNodeJoinCmd = (id: number) =>
+    http.post<{ command: string }>(`${base('nodes')}/join-cmd`, { id });
+export const upgradeNodes = (ids: number[]) =>
+    http.post<{ results: NodeUpgradeResult[] }>(`${base('nodes')}/upgrade`, { ids }, 300000);
 export const listAllNodes = () => http.post<NodeRow[]>('/core/nodes/list', { type: 'all' });
 
 // Reads another node's own resources through the master; failures stay silent so one
 // offline node never floods the page with toasts.
-export const nodeQuery = <T = any>(node: string, url: string, body: object) =>
-    http.postWithConfig<T>(url, body, { headers: { CurrentNode: node }, skipErrorMessage: true });
+// Note: api/index.ts request interceptor encodes headers.CurrentNode via encodeURIComponent,
+// so pass raw node name here to avoid double-encoding.
+export const nodeQuery = <T = any>(node: string, url: string, body: object, timeout = 12000) =>
+    http.postWithConfig<T>(url, body, {
+        timeout,
+        headers: { CurrentNode: node },
+        skipErrorMessage: true,
+    });

@@ -459,7 +459,7 @@ const formatJsonBody = () => {
     if (!result.success) {
         MsgError(
             i18n.global.t(
-                result.error === 'bodyTooLarge'
+                (result as any).error === 'bodyTooLarge'
                     ? 'xpack.alert.jsonFormatTooLarge'
                     : 'xpack.alert.customWebhookValidation.jsonInvalid',
             ),

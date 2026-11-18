@@ -1,8 +1,10 @@
 package node
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -12,8 +14,10 @@ import (
 	"time"
 
 	"github.com/1Panel-dev/1Panel/core/app/model"
+	"github.com/1Panel-dev/1Panel/core/constant"
 	"github.com/1Panel-dev/1Panel/core/global"
 	"github.com/1Panel-dev/1Panel/core/init/proxy"
+	"github.com/1Panel-dev/1Panel/core/utils/encrypt"
 	"github.com/1Panel-dev/1Panel/core/utils/ssh"
 	"github.com/gin-gonic/gin"
 )
@@ -28,9 +32,12 @@ type Provider struct {
 
 func NewProvider() *Provider { return &Provider{} }
 
-// StartBackground begins the node status collector; safe to call repeatedly.
+// StartBackground begins the node status collector and alert engine; safe to call repeatedly.
 func (p *Provider) StartBackground() {
-	p.once.Do(func() { go collectLoop() })
+	p.once.Do(func() {
+		go collectLoop()
+		go alertLoop()
+	})
 }
 
 func (p *Provider) agentTransport() (*http.Transport, error) {
@@ -72,11 +79,8 @@ func fail(c *gin.Context, code int, msg string) {
 func (p *Provider) Proxy(c *gin.Context, currentNode string) {
 	p.StartBackground()
 	path := c.Request.URL.Path
-	// node management and resource sync are served by the master
-	if strings.HasPrefix(path, "/api/v2/core/xpack/nodes") || strings.HasPrefix(path, "/api/v2/core/xpack/panels") ||
-		strings.HasPrefix(path, "/api/v2/core/xpack/sync/") || strings.HasPrefix(path, "/api/v2/core/xpack/alert/") ||
-		strings.HasPrefix(path, "/api/v2/core/xpack/settings/search") || strings.HasPrefix(path, "/api/v2/core/xpack/settings/update") ||
-		strings.HasPrefix(path, "/api/v2/core/xpack/settings/upload") {
+	// all /api/v2/core/xpack/* endpoints are served by the master's core router
+	if strings.HasPrefix(path, "/api/v2/core/xpack/") || path == "/api/v2/core/xpack" {
 		c.Next()
 		return
 	}
@@ -141,15 +145,139 @@ func (p *Provider) UpdateGroup(name string, group, newGroup uint) error {
 	return global.DB.Model(&model.Node{}).Where("group_id = ?", group).Update("group_id", newGroup).Error
 }
 
-func (p *Provider) CheckBackupUsed(name string) error { return nil }
-
-func (p *Provider) LoadNodeInfo(currentNode string) (*ssh.ConnInfo, string, error) {
-	return nil, "", nil
+func (p *Provider) CheckBackupUsed(name string) error {
+	if global.DB == nil {
+		return nil
+	}
+	targets := []string{"local"}
+	var nodes []model.Node
+	if err := global.DB.Where("kind = ? AND status = ?", kindNode, statusHealthy).Find(&nodes).Error; err == nil {
+		for _, n := range nodes {
+			if n.Addr != "" {
+				targets = append(targets, n.Name)
+			}
+		}
+	}
+	for _, target := range targets {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := agentJSONCtx(ctx, target, http.MethodPost, "/xpack/node/check-backup-used", map[string]string{"name": name}, nil)
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (p *Provider) Sync(dataType string) error { return nil }
+func (p *Provider) LoadNodeInfo(currentNode string) (*ssh.ConnInfo, string, error) {
+	return nil, "", fmt.Errorf("SSH credentials are not stored on master for node %q", currentNode)
+}
 
-func (p *Provider) AutoUpgradeWithMaster() {}
+func (p *Provider) Sync(dataType string) error {
+	if global.DB == nil {
+		return nil
+	}
+	payload := map[string]interface{}{}
+	if dataType == constant.SyncBackupAccounts || dataType == "" {
+		var backups []model.BackupAccount
+		if err := global.DB.Where("is_public = ?", true).Find(&backups).Error; err != nil {
+			return err
+		}
+		for i := range backups {
+			if backups[i].AccessKey != "" {
+				if plain, err := encrypt.StringDecrypt(backups[i].AccessKey); err == nil {
+					backups[i].AccessKey = plain
+				}
+			}
+			if backups[i].Credential != "" {
+				if plain, err := encrypt.StringDecrypt(backups[i].Credential); err == nil {
+					backups[i].Credential = plain
+				}
+			}
+		}
+		payload["backupAccounts"] = backups
+	}
+	if dataType == constant.SyncScripts || dataType == "" {
+		var scripts []model.ScriptLibrary
+		if err := global.DB.Where("is_interactive = ?", false).Find(&scripts).Error; err != nil {
+			return err
+		}
+		items := make([]map[string]interface{}, 0, len(scripts))
+		for _, s := range scripts {
+			items = append(items, map[string]interface{}{
+				"name":   s.Name,
+				"script": s.Script,
+			})
+		}
+		payload["scripts"] = items
+	}
+	if len(payload) == 0 {
+		return nil
+	}
+
+	targets := []string{"local"}
+	var nodes []model.Node
+	if err := global.DB.Where("kind = ? AND status = ?", kindNode, statusHealthy).Find(&nodes).Error; err == nil {
+		for _, n := range nodes {
+			if n.Addr != "" {
+				targets = append(targets, n.Name)
+			}
+		}
+	}
+	var errs []string
+	for _, target := range targets {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err := agentJSONCtx(ctx, target, http.MethodPost, "/xpack/node/sync-meta", payload, nil)
+		cancel()
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", target, err))
+		}
+	}
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func (p *Provider) AutoUpgradeWithMaster() {
+	go func() {
+		if _, err := UpgradeNodes(nil); err != nil {
+			global.LOG.Warnf("auto upgrade child nodes failed: %v", err)
+		}
+	}()
+}
+
+// RevokeChildTerminals fans out terminal session revocation to all healthy child nodes.
+func RevokeChildTerminals(scope, userID, authSessionID string) error {
+	if global.DB == nil {
+		return nil
+	}
+	var nodes []model.Node
+	if err := global.DB.Where("kind = ? AND status = ?", kindNode, statusHealthy).Find(&nodes).Error; err != nil {
+		return nil
+	}
+	body := map[string]string{
+		"scope":         scope,
+		"userId":        userID,
+		"authSessionId": authSessionID,
+	}
+	var errs []string
+	for _, n := range nodes {
+		if n.Addr == "" {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := agentJSONCtx(ctx, n.Name, http.MethodPost, "/internal/terminal/sessions/revoke", body, nil)
+		cancel()
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", n.Name, err))
+		}
+	}
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
+}
 
 func (p *Provider) LoadRequestTransport() *http.Transport {
 	return &http.Transport{

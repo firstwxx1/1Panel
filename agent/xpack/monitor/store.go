@@ -3,29 +3,32 @@ package monitor
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/1Panel-dev/1Panel/agent/global"
 	_ "github.com/glebarez/go-sqlite"
 )
 
 // Config is the user-facing monitor configuration, kept in a small json file next to monitor.db.
 type Config struct {
-	Enabled       bool            `json:"enabled"` // global switch; sites only collect while it is on
-	Sites         map[string]bool `json:"sites"`   // website alias -> enabled
-	RetentionDays int             `json:"retentionDays"`
-	DetailMax     int             `json:"detailMax"`
-	ExcludeIPs    []string        `json:"excludeIps"`
-	ExcludeSuffix []string        `json:"excludeSuffix"` // matching requests are dropped entirely
-	StaticSuffix  []string        `json:"staticSuffix"`  // matching requests count as traffic but not as page views
-	ExcludeStatus []string        `json:"excludeStatus"` // status codes dropped entirely
-	ExcludeUri    []string        `json:"excludeUri"`    // url paths dropped entirely; a trailing * matches a prefix
-	ExcludeUA     []string        `json:"excludeUa"`     // user-agent substrings dropped entirely
-	CDN           bool            `json:"cdn"`           // trust the first X-Forwarded-For entry as the client ip
-	SiteRules     map[string]Rules `json:"siteRules"`    // per-website additions to the global rules
+	Enabled       bool             `json:"enabled"` // global switch; sites only collect while it is on
+	Sites         map[string]bool  `json:"sites"`   // website alias -> enabled
+	RetentionDays int              `json:"retentionDays"`
+	DetailMax     int              `json:"detailMax"`
+	ExcludeIPs    []string         `json:"excludeIps"`
+	ExcludeSuffix []string         `json:"excludeSuffix"` // matching requests are dropped entirely
+	StaticSuffix  []string         `json:"staticSuffix"`  // matching requests count as traffic but not as page views
+	ExcludeStatus []string         `json:"excludeStatus"` // status codes dropped entirely
+	ExcludeUri    []string         `json:"excludeUri"`    // url paths dropped entirely; a trailing * matches a prefix
+	ExcludeUA     []string         `json:"excludeUa"`     // user-agent substrings dropped entirely
+	CDN           bool             `json:"cdn"`           // trust the first X-Forwarded-For entry as the client ip
+	SiteRules     map[string]Rules `json:"siteRules"`     // per-website additions to the global rules
 }
 
 // Rules are the per-website additions of the exclusion rules; they are merged with the global ones.
@@ -36,6 +39,21 @@ type Rules struct {
 	ExcludeIPs    []string `json:"excludeIps"`
 	ExcludeUA     []string `json:"excludeUa"`
 	CDN           bool     `json:"cdn"`
+}
+
+func cloneConfig(src Config) Config {
+	out := src
+	out.Sites = make(map[string]bool, len(src.Sites))
+	for k, v := range src.Sites {
+		out.Sites[k] = v
+	}
+	if src.SiteRules != nil {
+		out.SiteRules = make(map[string]Rules, len(src.SiteRules))
+		for k, v := range src.SiteRules {
+			out.SiteRules[k] = v
+		}
+	}
+	return out
 }
 
 // For returns the effective configuration of one website: global rules plus its own.
@@ -69,6 +87,7 @@ func defaultConfig() Config {
 type Store struct {
 	Dir string // <data dir>/monitor
 	db  *sql.DB
+	rdb *sql.DB
 
 	mu  sync.Mutex
 	cfg *Config
@@ -86,21 +105,57 @@ func Open(dir string) (*Store, error) {
 	if defaultStore != nil {
 		return defaultStore, nil
 	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)", path.Join(dir, "monitor.db")))
+	dbFile := path.Join(dir, "monitor.db")
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)", dbFile))
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
+
 	s := &Store{Dir: dir, db: db}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, err
 	}
+
+	rdb, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=query_only(ON)", dbFile))
+	if err == nil {
+		rdb.SetMaxOpenConns(4)
+		s.rdb = rdb
+	}
+
 	defaultStore = s
 	return s, nil
+}
+
+// DefaultStore returns the active monitor store if already opened or present on disk.
+func DefaultStore() (*Store, error) {
+	storeMu.Lock()
+	if defaultStore != nil {
+		s := defaultStore
+		storeMu.Unlock()
+		return s, nil
+	}
+	storeMu.Unlock()
+
+	if global.Dir.DataDir == "" {
+		return nil, errors.New("data dir not initialized")
+	}
+	dir := path.Join(global.Dir.DataDir, "monitor")
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return nil, nil
+	}
+	return Open(dir)
+}
+
+func (s *Store) reader() *sql.DB {
+	if s.rdb != nil {
+		return s.rdb
+	}
+	return s.db
 }
 
 func (s *Store) migrate() error {
@@ -120,7 +175,7 @@ func (s *Store) migrate() error {
 		// visitors and ips are deduplicated per local day (hour holds the day's first hour) to keep the db small
 		// h is the hour the visitor was first seen that day, so hourly new-visitor counts add up to the day's UV
 		`CREATE TABLE IF NOT EXISTS vis2 (site TEXT, hour INTEGER, ip TEXT, ua INTEGER, h INTEGER, PRIMARY KEY (site, hour, ip, ua)) WITHOUT ROWID`,
-		`CREATE TABLE IF NOT EXISTS offsets (site TEXT PRIMARY KEY, off INTEGER)`,
+		`CREATE TABLE IF NOT EXISTS offsets (site TEXT PRIMARY KEY, off INTEGER, ino INTEGER DEFAULT 0)`,
 	}
 	// vis2 without the h column comes from an older build; its numbers cannot be upgraded
 	var hasH, exists int
@@ -134,6 +189,8 @@ func (s *Store) migrate() error {
 			return err
 		}
 	}
+	// Migrate existing offsets tables created without the ino column (ignore duplicate-column error).
+	_, _ = s.db.Exec(`ALTER TABLE offsets ADD COLUMN ino INTEGER DEFAULT 0`)
 	return nil
 }
 
@@ -158,7 +215,7 @@ func (s *Store) Config() Config {
 		}
 		s.cfg = &c
 	}
-	return *s.cfg
+	return cloneConfig(*s.cfg)
 }
 
 func (s *Store) SaveConfig(c Config) error {
@@ -171,20 +228,56 @@ func (s *Store) SaveConfig(c Config) error {
 	if c.Sites == nil {
 		c.Sites = map[string]bool{}
 	}
-	data, err := json.MarshalIndent(c, "", "  ")
+	cloned := cloneConfig(c)
+	data, err := json.MarshalIndent(cloned, "", "  ")
 	if err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := os.WriteFile(s.cfgFile(), data, 0644); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.cfgFile()), 0o755); err != nil {
 		return err
 	}
-	s.cfg = &c
+	tmp := s.cfgFile() + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, s.cfgFile()); err != nil {
+		return err
+	}
+	s.cfg = &cloned
 	return nil
 }
 
-// Cleanup removes data older than the retention window and trims the detail table.
+// RemoveSite cleans up config entries and all SQLite tables for a deleted website.
+func (s *Store) RemoveSite(alias string) error {
+	if alias == "" {
+		return nil
+	}
+	cfg := s.Config()
+	cfgChanged := false
+	if _, ok := cfg.Sites[alias]; ok {
+		delete(cfg.Sites, alias)
+		cfgChanged = true
+	}
+	if cfg.SiteRules != nil {
+		if _, ok := cfg.SiteRules[alias]; ok {
+			delete(cfg.SiteRules, alias)
+			cfgChanged = true
+		}
+	}
+	if cfgChanged {
+		_ = s.SaveConfig(cfg)
+	}
+	for _, t := range []string{"hits", "agg", "dim", "vis2", "offsets"} {
+		if _, err := s.db.Exec("DELETE FROM "+t+" WHERE site = ?", alias); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Cleanup removes data older than the retention window, trims the detail table, and checkpoints WAL.
 func (s *Store) Cleanup() {
 	c := s.Config()
 	cut := time.Now().AddDate(0, 0, -c.RetentionDays)
@@ -194,6 +287,7 @@ func (s *Store) Cleanup() {
 	_, _ = s.db.Exec(`DELETE FROM vis2 WHERE hour < ?`, hour)
 	_, _ = s.db.Exec(`DELETE FROM hits WHERE ts < ?`, cut.Unix())
 	_, _ = s.db.Exec(`DELETE FROM hits WHERE id <= (SELECT MAX(id) FROM hits) - ?`, c.DetailMax)
+	_, _ = s.db.Exec(`PRAGMA wal_checkpoint(PASSIVE)`)
 }
 
 // Clear drops every collected number of a website (or all when site is empty).

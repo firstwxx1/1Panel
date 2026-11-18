@@ -3,7 +3,9 @@
 package router
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/1Panel-dev/1Panel/agent/app/api/v2/helper"
@@ -32,7 +34,7 @@ func wafHandle[T any](fn func(s *waf.Store, req T) (interface{}, error)) gin.Han
 	return func(c *gin.Context) {
 		var req T
 		if c.Request.Method == "POST" {
-			if err := c.ShouldBindJSON(&req); err != nil {
+			if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
 				helper.BadRequest(c, err)
 				return
 			}
@@ -129,7 +131,7 @@ func (a *WafRouter) InitRouter(Router *gin.RouterGroup) {
 	g.POST("/blocks/export", wafCSV("waf-block", func(s *waf.Store, c *gin.Context) ([]byte, error) {
 		var req waf.BlockQuery
 		_ = c.ShouldBindJSON(&req)
-		req.Page, req.Size = 1, 200
+		req.Page, req.Size = 1, 10000
 		page, err := waf.ListBlocks(s, req)
 		if err != nil {
 			return nil, err
@@ -140,17 +142,20 @@ func (a *WafRouter) InitRouter(Router *gin.RouterGroup) {
 		return waf.LoadLogOptions(s.OpenrestyPath)
 	}))
 	g.POST("/logs/clear", wafHandle(func(s *waf.Store, _ wafEmpty) (interface{}, error) {
-		return nil, waf.ClearLogs(s.OpenrestyPath)
+		return nil, s.ClearLogs()
 	}))
 	g.POST("/logs/export", wafCSV("waf-log", func(s *waf.Store, c *gin.Context) ([]byte, error) {
 		var req waf.LogQuery
 		_ = c.ShouldBindJSON(&req)
 		return waf.ExportLogs(s.OpenrestyPath, req)
 	}))
+	g.POST("/maintenance", wafHandle(func(s *waf.Store, _ wafEmpty) (interface{}, error) {
+		return nil, s.RunMaintenance()
+	}))
 	g.POST("/report", wafHandle(func(s *waf.Store, req waf.LogQuery) (interface{}, error) {
 		return waf.LoadReport(s.OpenrestyPath, req)
 	}))
-	g.GET("/global",wafHandle(func(s *waf.Store, _ wafEmpty) (interface{}, error) {
+	g.GET("/global", wafHandle(func(s *waf.Store, _ wafEmpty) (interface{}, error) {
 		return s.GetGlobal()
 	}))
 	g.POST("/global/update", wafHandle(func(s *waf.Store, req wafPatchReq) (interface{}, error) {

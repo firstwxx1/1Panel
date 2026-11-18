@@ -7,6 +7,9 @@
             <el-checkbox v-model="auto">{{ $t('pro.monitor.autoRefresh') }}</el-checkbox>
         </div>
         <el-table :data="items" v-loading="loading" size="small">
+            <el-table-column v-if="isMaster" prop="node" :label="$t('pro.monitor.node')" width="110" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.node || '-' }}</template>
+            </el-table-column>
             <el-table-column :label="$t('pro.monitor.time')" width="170">
                 <template #default="{ row }">{{ fmt(row.time) }}</template>
             </el-table-column>
@@ -22,7 +25,7 @@
                 </template>
             </el-table-column>
             <el-table-column :label="$t('pro.monitor.duration')" width="90">
-                <template #default="{ row }">{{ row.rt ? (row.rt * 1000).toFixed(0) + ' ms' : '-' }}</template>
+                <template #default="{ row }">{{ row.rt > 0 ? (row.rt * 1000).toFixed(0) + ' ms' : '-' }}</template>
             </el-table-column>
             <el-table-column prop="ua" :label="$t('pro.monitor.ua')" min-width="220" show-overflow-tooltip />
             <template #empty>{{ $t('pro.monitor.noData') }}</template>
@@ -41,14 +44,16 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Search } from '@element-plus/icons-vue';
-import { monRealtime } from '@/xpack/api/monitor';
+import { isMasterView } from '@/xpack/api/aggregate';
+import { MonHitNode, monRealtimeAgg } from '@/xpack/api/monitor';
 
 const props = defineProps<{ site: string }>();
+const isMaster = computed(() => isMasterView());
 const ip = ref('');
 const url = ref('');
-const items = ref<any[]>([]);
+const items = ref<MonHitNode[]>([]);
 const total = ref(0);
 const page = ref(1);
 const size = ref(20);
@@ -64,9 +69,15 @@ const fmt = (ts: number) => {
 const load = async (silent = false) => {
     if (!silent) loading.value = true;
     try {
-        const res = await monRealtime({ site: props.site, ip: ip.value, url: url.value, page: page.value, size: size.value });
-        items.value = res.data.items || [];
-        total.value = res.data.total;
+        const res = await monRealtimeAgg({
+            site: props.site,
+            ip: ip.value,
+            url: url.value,
+            page: page.value,
+            size: size.value,
+        });
+        items.value = res.items || [];
+        total.value = res.total;
     } finally {
         loading.value = false;
     }
@@ -80,6 +91,7 @@ const tick = () => {
     timer = auto.value ? window.setInterval(() => page.value === 1 && load(true), 5000) : undefined;
 };
 watch(auto, tick);
+watch(() => props.site, reload);
 onMounted(() => {
     load();
     tick();

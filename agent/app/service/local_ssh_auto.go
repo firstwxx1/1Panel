@@ -6,8 +6,10 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,18 +72,59 @@ func localConnWorks(enc string) bool {
 	return true
 }
 
-func localSSHPort() int {
-	data, err := os.ReadFile(sshPath)
-	if err != nil {
-		return 22
+func sshPortFromDropIns() (int, bool) {
+	files, err := filepath.Glob("/etc/ssh/sshd_config.d/*.conf")
+	if err != nil || len(files) == 0 {
+		return 0, false
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	sort.Strings(files)
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		if p, ok := parseSSHPortBytes(data, false); ok {
+			return p, true
+		}
+	}
+	return 0, false
+}
+
+func parseSSHPortBytes(data []byte, followInclude bool) (int, bool) {
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
 		f := strings.Fields(line)
-		if len(f) == 2 && strings.EqualFold(f[0], "Port") {
-			if p, err := strconv.Atoi(f[1]); err == nil && p > 0 {
-				return p
+		if len(f) < 2 {
+			continue
+		}
+		if strings.EqualFold(f[0], "Match") {
+			break
+		}
+		if followInclude && strings.EqualFold(f[0], "Include") && strings.Contains(f[1], "sshd_config.d") {
+			if p, ok := sshPortFromDropIns(); ok {
+				return p, true
 			}
 		}
+		if strings.EqualFold(f[0], "Port") {
+			if p, err := strconv.Atoi(f[1]); err == nil && p > 0 && p <= 65535 {
+				return p, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func localSSHPort() int {
+	if data, err := os.ReadFile(sshPath); err == nil {
+		if p, ok := parseSSHPortBytes(data, true); ok {
+			return p
+		}
+	}
+	if p, ok := sshPortFromDropIns(); ok {
+		return p
 	}
 	return 22
 }
@@ -107,9 +150,22 @@ func setupLocalSSH() error {
 		return err
 	}
 	akPath := filepath.Join(dir, "authorized_keys")
-	old, _ := os.ReadFile(akPath)
-	prefix := string(old)
-	if prefix != "" && !strings.HasSuffix(prefix, "\n") {
+	old, readErr := os.ReadFile(akPath)
+	oldExists := readErr == nil
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return readErr
+	}
+	var kept []string
+	if oldExists {
+		for _, existing := range strings.Split(string(old), "\n") {
+			if strings.Contains(existing, autoKeyComment) {
+				continue
+			}
+			kept = append(kept, existing)
+		}
+	}
+	prefix := strings.TrimRight(strings.Join(kept, "\n"), "\n")
+	if prefix != "" {
 		prefix += "\n"
 	}
 	if err := os.WriteFile(akPath, []byte(prefix+line), 0o600); err != nil {
@@ -119,7 +175,11 @@ func setupLocalSSH() error {
 	port := localSSHPort()
 	client, err := ssh.NewClient(ssh.ConnInfo{User: "root", Addr: "127.0.0.1", Port: port, AuthMode: "key", PrivateKey: privPEM})
 	if err != nil { // sshd refuses root key login: undo and leave manual setup to the user
-		_ = os.WriteFile(akPath, old, 0o600)
+		if oldExists {
+			_ = os.WriteFile(akPath, old, 0o600)
+		} else {
+			_ = os.Remove(akPath)
+		}
 		return err
 	}
 	client.Close()

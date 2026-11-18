@@ -1,4 +1,14 @@
 import http from '@/api';
+import {
+    fanOut,
+    isMasterView,
+    mergeBuckets,
+    mergeKeyed,
+    nodeExec,
+    nodeGet,
+    nodeGetExec,
+    nodeQuery,
+} from '@/xpack/api/aggregate';
 
 export interface WafDayStat {
     day: string;
@@ -94,6 +104,7 @@ export interface WafSite {
 }
 
 export interface WafRule {
+    id?: string;
     state?: string;
     name?: string;
     rule?: string;
@@ -101,58 +112,106 @@ export interface WafRule {
     [key: string]: any;
 }
 
+export interface GeoRestrictConfig {
+    state: 'on' | 'off';
+    schemaVersion: number;
+    type: 'geoRestrict';
+    res: 'geo';
+    code: number;
+    action: 'deny' | 'allow';
+    rules: string[];
+    provinceAction?: 'deny' | 'allow';
+    provinceRules?: string[];
+}
+
 export const getWafOverview = () => http.get<WafOverview>('/xpack/waf/overview');
 export const searchWafLogs = (req: WafLogQuery) =>
     http.post<{ total: number; items: WafAttackLog[] }>('/xpack/waf/logs/search', req);
 export const listWafBlocks = (req: WafBlockQuery) =>
     http.post<{ total: number; items: WafBlockItem[] }>('/xpack/waf/blocks/search', req);
-export const removeWafBlocks = (ips: string[]) => http.post('/xpack/waf/blocks/remove', { ips });
-export const clearWafBlocks = () => http.post('/xpack/waf/blocks/clear');
+export const removeWafBlocks = (ips: string[], node?: string) =>
+    node ? nodeExec(node, '/xpack/waf/blocks/remove', { ips }) : http.post('/xpack/waf/blocks/remove', { ips });
+export const clearWafBlocks = (node?: string) =>
+    node ? nodeExec(node, '/xpack/waf/blocks/clear', {}) : http.post('/xpack/waf/blocks/clear');
 export const getWafLogOptions = () => http.get<WafLogOptions>('/xpack/waf/logs/options');
-export const clearWafLogs = () => http.post('/xpack/waf/logs/clear');
+export const clearWafLogs = (node?: string) =>
+    node ? nodeExec(node, '/xpack/waf/logs/clear', {}) : http.post('/xpack/waf/logs/clear');
+export const maintainWafLogs = (node?: string) =>
+    node ? nodeExec(node, '/xpack/waf/maintenance', {}) : http.post('/xpack/waf/maintenance', {});
 export const exportWafLogs = (req: WafLogQuery) =>
     http.download<BlobPart>('/xpack/waf/logs/export', req, { responseType: 'blob' });
 export const exportWafBlocks = (req: WafBlockQuery) =>
     http.download<BlobPart>('/xpack/waf/blocks/export', req, { responseType: 'blob' });
 export const getWafReport = (req: WafLogQuery) => http.post<WafReport>('/xpack/waf/report', req);
-export const getWafGlobal = () => http.get<Record<string, any>>('/xpack/waf/global');
-export const updateWafGlobal = (patch: Record<string, any>) => http.post('/xpack/waf/global/update', { patch });
-export const listWafSites = () => http.get<WafSite[]>('/xpack/waf/sites');
-export const applyWafGlobal = (keys: string[]) => http.post('/xpack/waf/global/apply', { keys });
-export const updateWafSite = (key: string, patch: Record<string, any>) =>
-    http.post('/xpack/waf/site/update', { key, patch });
-export const searchWafRules = (name: string, site: string, search: string, page: number, size: number) =>
-    http.post<{ total: number; items: WafRule[] }>('/xpack/waf/rules/search', { name, site, search, page, size });
-export const saveWafRule = (name: string, site: string, rule: WafRule, oldId: string) =>
-    http.post('/xpack/waf/rules/save', { name, site, rule, oldId });
-export const deleteWafRules = (name: string, site: string, ids: string[]) =>
-    http.post('/xpack/waf/rules/delete', { name, site, ids });
+export const getWafGlobal = (node?: string) =>
+    node ? nodeGetExec<Record<string, any>>(node, '/xpack/waf/global') : http.get<Record<string, any>>('/xpack/waf/global');
+export const updateWafGlobal = (patch: Record<string, any>, node?: string) =>
+    node ? nodeExec(node, '/xpack/waf/global/update', { patch }) : http.post('/xpack/waf/global/update', { patch });
+export const listWafSites = (node?: string) =>
+    node ? nodeGetExec<WafSite[]>(node, '/xpack/waf/sites') : http.get<WafSite[]>('/xpack/waf/sites');
+export const applyWafGlobal = (keys: string[], node?: string) =>
+    node ? nodeExec(node, '/xpack/waf/global/apply', { keys }) : http.post('/xpack/waf/global/apply', { keys });
+export const updateWafSite = (key: string, patch: Record<string, any>, node?: string) =>
+    node ? nodeExec(node, '/xpack/waf/site/update', { key, patch }) : http.post('/xpack/waf/site/update', { key, patch });
+export const searchWafRules = (
+    name: string,
+    site: string,
+    search: string,
+    page: number,
+    size: number,
+    node?: string,
+) =>
+    node
+        ? nodeExec<{ total: number; items: WafRule[] }>(node, '/xpack/waf/rules/search', {
+              name,
+              site,
+              search,
+              page,
+              size,
+          })
+        : http.post<{ total: number; items: WafRule[] }>('/xpack/waf/rules/search', {
+              name,
+              site,
+              search,
+              page,
+              size,
+          });
+export const saveWafRule = (name: string, site: string, rule: WafRule, oldId: string, node?: string) =>
+    node
+        ? nodeExec(node, '/xpack/waf/rules/save', { name, site, rule, oldId })
+        : http.post('/xpack/waf/rules/save', { name, site, rule, oldId });
+export const deleteWafRules = (name: string, site: string, ids: string[], node?: string) =>
+    node
+        ? nodeExec(node, '/xpack/waf/rules/delete', { name, site, ids })
+        : http.post('/xpack/waf/rules/delete', { name, site, ids });
 
 // ---------------------------------------------------------------------------
 // Aggregated reads: when the panel sits on the master ("local"), these fan the
 // read-only queries out to every healthy node and merge the results, so the
-// master view shows the whole fleet. Rows carry a `node` field (used for the
-// 节点 column and to route per-row write ops back to the node they came from).
-// Single-node views are untouched — the plain functions above keep being used.
+// master view shows the whole fleet.
 // ---------------------------------------------------------------------------
-
-import { fanOut, isMasterView, mergeBuckets, mergeKeyed, nodeQuery } from '@/xpack/api/aggregate';
 
 export type WafLogNode = WafAttackLog & { node: string };
 export type WafBlockNode = WafBlockItem & { node: string };
+
+const formatLocalToday = (): string => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
 
 export async function getWafOverviewAgg(): Promise<WafOverview> {
     if (!isMasterView()) {
         return (await getWafOverview()).data;
     }
-    // /overview is a GET route on the agent, so it must go through httpGetNode, not the POST helper
-    const parts = await fanOut((n) => httpGetNode<WafOverview>(n, '/xpack/waf/overview'));
+    const parts = await fanOut((n) => nodeGet<WafOverview>(n, '/xpack/waf/overview'));
     const numKeys = ['reqCount', 'attackCount', 'count4xx', 'count5xx'] as const;
-    const today: WafDayStat = { day: '', reqCount: 0, attackCount: 0, count4xx: 0, count5xx: 0 };
+    const localDay = formatLocalToday();
+    const today: WafDayStat = { day: localDay, reqCount: 0, attackCount: 0, count4xx: 0, count5xx: 0 };
     for (const p of parts) {
-        numKeys.forEach((k) => (today[k] += p.data.today?.[k] || 0));
+        if (p.data.today?.day === localDay) {
+            numKeys.forEach((k) => (today[k] += p.data.today?.[k] || 0));
+        }
     }
-    today.day = parts.find((p) => p.data.today?.day)?.data.today.day || '';
     const trend = mergeKeyed(
         parts.map((p) => p.data.trend || []),
         'day',
@@ -167,14 +226,20 @@ export async function searchWafLogsAgg(req: WafLogQuery): Promise<{ total: numbe
     }
     const page = req.page || 1;
     const size = req.size || 20;
-    // fetch enough rows from every node to cover the requested page after the merge
     const parts = await fanOut((n) =>
-        nodeQuery<{ total: number; items: WafAttackLog[] }>(n, '/xpack/waf/logs/search', { ...req, page: 1, size: page * size }),
+        nodeQuery<{ total: number; items: WafAttackLog[] }>(n, '/xpack/waf/logs/search', {
+            ...req,
+            page: 1,
+            size: page * size,
+        }),
     );
     const items = parts
         .flatMap((p) => (p.data.items || []).map((l) => ({ ...l, node: p.node })))
         .sort((a, b) => (a.time < b.time ? 1 : -1));
-    return { total: parts.reduce((s, p) => s + (p.data.total || 0), 0), items: items.slice((page - 1) * size, page * size) };
+    return {
+        total: parts.reduce((s, p) => s + (p.data.total || 0), 0),
+        items: items.slice((page - 1) * size, page * size),
+    };
 }
 
 export async function listWafBlocksAgg(req: WafBlockQuery): Promise<{ total: number; items: WafBlockNode[] }> {
@@ -185,12 +250,19 @@ export async function listWafBlocksAgg(req: WafBlockQuery): Promise<{ total: num
     const page = req.page || 1;
     const size = req.size || 20;
     const parts = await fanOut((n) =>
-        nodeQuery<{ total: number; items: WafBlockItem[] }>(n, '/xpack/waf/blocks/search', { ...req, page: 1, size: page * size }),
+        nodeQuery<{ total: number; items: WafBlockItem[] }>(n, '/xpack/waf/blocks/search', {
+            ...req,
+            page: 1,
+            size: page * size,
+        }),
     );
     const items = parts
         .flatMap((p) => (p.data.items || []).map((b) => ({ ...b, node: p.node })))
         .sort((a, b) => (a.blockedAt < b.blockedAt ? 1 : -1));
-    return { total: parts.reduce((s, p) => s + (p.data.total || 0), 0), items: items.slice((page - 1) * size, page * size) };
+    return {
+        total: parts.reduce((s, p) => s + (p.data.total || 0), 0),
+        items: items.slice((page - 1) * size, page * size),
+    };
 }
 
 export async function getWafReportAgg(req: WafLogQuery): Promise<WafReport> {
@@ -213,22 +285,11 @@ export async function getWafLogOptionsAgg(): Promise<WafLogOptions> {
     if (!isMasterView()) {
         return (await getWafLogOptions()).data;
     }
-    const parts = await fanOut((n) => httpGetNode<WafLogOptions>(n, '/xpack/waf/logs/options'));
+    const parts = await fanOut((n) => nodeGet<WafLogOptions>(n, '/xpack/waf/logs/options'));
     const uniq = (lists: string[][]) => [...new Set(lists.flat())].sort();
     return {
         websites: uniq(parts.map((p) => p.data.websites || [])),
         ruleTypes: uniq(parts.map((p) => p.data.ruleTypes || [])),
         actions: uniq(parts.map((p) => p.data.actions || [])),
     };
-}
-
-// GET against one node (the shared nodeQuery helper is POST-only); the master proxies
-// it to the child's agent and failures stay silent like the other fan-out calls.
-async function httpGetNode<T>(nodeName: string, url: string): Promise<T | undefined> {
-    try {
-        const res = await http.get<T>(url, undefined, { headers: { CurrentNode: nodeName }, skipErrorMessage: true });
-        return res.data as T;
-    } catch {
-        return undefined;
-    }
 }

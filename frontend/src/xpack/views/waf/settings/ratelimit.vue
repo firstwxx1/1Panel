@@ -12,9 +12,16 @@
                 <el-switch v-model="item.state" active-value="on" inactive-value="off" size="large" />
                 <div class="summary">
                     {{ summary }}
-                    <el-tag size="small" type="primary" effect="light" class="ml-2">{{ $t('pro.waf.siteTag') }}</el-tag>
+                    <el-tag
+                        size="small"
+                        :type="isSiteRule ? 'primary' : 'success'"
+                        effect="light"
+                        class="ml-2"
+                    >
+                        {{ isSiteRule ? $t('pro.waf.siteTag') : $t('pro.waf.globalTag') }}
+                    </el-tag>
                 </div>
-                <el-form label-width="120px" class="mt-4">
+                <el-form label-width="130px" class="mt-4">
                     <el-form-item v-if="active === 'cc'" :label="$t('pro.waf.mode')" required>
                         <el-select v-model="item.mode" style="width: 240px">
                             <el-option value="uri" :label="$t('pro.waf.urlMode')" />
@@ -29,16 +36,44 @@
                         <el-input-number v-model="item.threshold" :min="1" controls-position="right" style="width: 140px" />
                         <span class="unit">{{ $t('pro.waf.times') }}</span>
                     </el-form-item>
-                    <el-form-item :label="$t('pro.waf.blockTime')" required>
+                    <el-form-item :label="$t('pro.waf.action')" required>
+                        <el-select v-model="item.action" style="width: 240px">
+                            <el-option v-for="a in actionOptions" :key="a" :value="a" :label="$t('pro.waf.act_' + a)" />
+                        </el-select>
+                    </el-form-item>
+                    <el-form-item
+                        v-if="item.action === 'five_seconds' || item.action === 'captcha'"
+                        :label="$t('pro.waf.tokenTimeOut')"
+                    >
+                        <el-input-number
+                            v-model="item.tokenTimeOut"
+                            :min="10"
+                            :max="86400"
+                            controls-position="right"
+                            style="width: 140px"
+                        />
+                        <span class="unit">{{ $t('pro.waf.second') }}</span>
+                        <div class="hint">{{ $t('pro.waf.tokenTimeOutHint') }}</div>
+                    </el-form-item>
+                    <el-form-item :label="$t('pro.waf.autoBlockIp')">
+                        <el-switch v-model="item.ipBlock" active-value="on" inactive-value="off" />
+                    </el-form-item>
+                    <el-form-item v-if="item.ipBlock !== 'off'" :label="$t('pro.waf.blockTime')" required>
                         <el-input-number v-model="item.ipBlockTime" :min="1" controls-position="right" style="width: 140px" />
                         <span class="unit">{{ $t('pro.waf.second') }}</span>
                     </el-form-item>
                     <el-form-item>
-                        <el-button type="primary" @click="save(false)">{{ $t('pro.waf.saveDefault') }}</el-button>
-                        <el-button type="primary" plain @click="save(true)">{{ $t('pro.waf.applyToSites') }}</el-button>
+                        <el-button type="primary" :loading="saving" @click="save(false)">
+                            {{ isSiteRule ? $t('pro.waf.saveDefault') : $t('pro.waf.configSave') }}
+                        </el-button>
+                        <el-button v-if="isSiteRule" type="primary" plain :loading="saving" @click="save(true)">
+                            {{ $t('pro.waf.applyToSites') }}
+                        </el-button>
                     </el-form-item>
                 </el-form>
-                <div class="note" v-if="active === 'cc'">{{ $t('pro.waf.globalModeNote') }}<br />{{ $t('pro.waf.urlModeNote') }}</div>
+                <div class="note" v-if="active === 'cc'">
+                    {{ $t('pro.waf.globalModeNote') }}<br />{{ $t('pro.waf.urlModeNote') }}
+                </div>
                 <div class="warn">{{ $t('pro.waf.blockWarning') }}</div>
             </div>
         </el-col>
@@ -46,12 +81,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useI18n } from 'vue-i18n';
 import { applyWafGlobal, updateWafGlobal } from '@/xpack/api/waf';
 
-const props = defineProps<{ config: Record<string, any> }>();
+const props = defineProps<{ config: Record<string, any>; node?: string }>();
 const emit = defineEmits<{ reload: [] }>();
 const { t } = useI18n();
 
@@ -61,32 +96,81 @@ const menus = [
     { key: 'notFoundCount', label: 'notFoundRate' },
     { key: 'urlcc', label: 'urlRate' },
 ];
+
+const actionOptions = ['deny', 'five_seconds', 'captcha', 'observe'];
 const active = ref('cc');
-const item = computed(() => props.config[active.value]);
+const saving = ref(false);
 
-const target = computed(() => (active.value === 'cc' && item.value?.mode === 'uri' ? t('pro.waf.targetUrl') : t('pro.waf.targetAny')));
+const defaultEntry = (key: string): Record<string, any> => ({
+    state: 'off',
+    type: key,
+    ...(key === 'cc' ? { mode: 'global' } : {}),
+    duration: 60,
+    threshold: key === 'attackCount' ? 10 : key === 'notFoundCount' ? 30 : key === 'urlcc' ? 60 : 120,
+    action: 'deny',
+    code: 403,
+    ipBlock: 'on',
+    ipBlockTime: 600,
+    tokenTimeOut: 1200,
+});
 
-const humanTime = (sec: number) => {
-    if (!sec) return `0${t('pro.waf.second')}`;
-    if (sec % 3600 === 0) return `${sec / 3600}${t('pro.waf.hour')}`;
-    if (sec % 60 === 0) return `${sec / 60}${t('pro.waf.minute')}`;
-    return `${sec}${t('pro.waf.second')}`;
-};
+const localItems = reactive<Record<string, Record<string, any>>>({
+    cc: defaultEntry('cc'),
+    attackCount: defaultEntry('attackCount'),
+    notFoundCount: defaultEntry('notFoundCount'),
+    urlcc: defaultEntry('urlcc'),
+});
+
+watch(
+    () => props.config,
+    (cfg) => {
+        for (const m of menus) {
+            const raw = cfg?.[m.key] || {};
+            localItems[m.key] = {
+                ...defaultEntry(m.key),
+                ...raw,
+                type: m.key,
+                action: raw.action || 'deny',
+                ipBlock: raw.ipBlock === 'off' ? 'off' : 'on',
+                tokenTimeOut: Number(raw.tokenTimeOut) > 0 ? Number(raw.tokenTimeOut) : 1200,
+            };
+        }
+    },
+    { immediate: true, deep: true },
+);
+
+const item = computed(() => localItems[active.value]);
+const isSiteRule = computed(() => active.value === 'cc' || active.value === 'urlcc');
+
+const target = computed(() =>
+    active.value === 'cc' && item.value?.mode === 'uri' ? t('pro.waf.targetUrl') : t('pro.waf.targetAny'),
+);
+
+const actionLabel = computed(() => {
+    const a = item.value?.action || 'deny';
+    return t('pro.waf.act_' + a);
+});
 
 const summary = computed(() =>
     t('pro.waf.summary', {
         period: item.value?.duration ?? 0,
         target: target.value,
         threshold: item.value?.threshold ?? 0,
-        time: humanTime(item.value?.ipBlockTime ?? 0),
+        action: actionLabel.value,
     }),
 );
 
 const save = async (apply: boolean) => {
-    await updateWafGlobal({ [active.value]: item.value });
-    if (apply) await applyWafGlobal([active.value]);
-    ElMessage.success(apply ? t('pro.waf.applySuccess') : t('pro.waf.saveSuccess'));
-    emit('reload');
+    saving.value = true;
+    try {
+        const payload = { ...item.value, type: active.value };
+        await updateWafGlobal({ [active.value]: payload }, props.node);
+        if (apply) await applyWafGlobal([active.value], props.node);
+        ElMessage.success(apply ? t('pro.waf.applySuccess') : t('pro.waf.saveSuccess'));
+        emit('reload');
+    } finally {
+        saving.value = false;
+    }
 };
 </script>
 
@@ -104,6 +188,13 @@ const save = async (apply: boolean) => {
 .unit {
     margin-left: 8px;
     color: var(--el-text-color-secondary);
+}
+.hint {
+    width: 100%;
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+    line-height: 1.4;
 }
 .note {
     margin-top: 8px;

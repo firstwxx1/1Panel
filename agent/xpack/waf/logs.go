@@ -12,6 +12,12 @@ import (
 // The 1pwaf engine normalizes every string into small lookup tables, one sqlite file each.
 // SQLite caps ATTACH at 10 databases, so lookups are resolved by id in separate queries.
 
+const (
+	maxLookupIDs = 10000
+	maxInBatch   = 900
+	maxSQLVars   = 30000
+)
+
 type dbs struct {
 	root string
 	open map[string]*sql.DB
@@ -40,14 +46,34 @@ func (d *dbs) close() {
 	}
 }
 
-func idList(ids map[int]bool) (string, []interface{}) {
-	holders := make([]string, 0, len(ids))
-	args := make([]interface{}, 0, len(ids))
-	for id := range ids {
-		holders = append(holders, "?")
-		args = append(args, id)
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+func idChunks(ids map[int]bool) [][]interface{} {
+	if len(ids) == 0 {
+		return nil
 	}
-	return strings.Join(holders, ","), args
+	all := make([]interface{}, 0, len(ids))
+	for id := range ids {
+		all = append(all, id)
+	}
+	var out [][]interface{}
+	for i := 0; i < len(all); i += maxInBatch {
+		end := i + maxInBatch
+		if end > len(all) {
+			end = len(all)
+		}
+		out = append(out, all[i:end])
+	}
+	return out
+}
+
+func placeholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
 
 // values resolves ids of a "value" lookup table.
@@ -58,37 +84,57 @@ func (d *dbs) values(group, name, table string, ids map[int]bool) (map[int]strin
 	}
 	db, err := d.get(group, name)
 	if err != nil {
+		if isMissingDB(err) {
+			return res, nil
+		}
 		return nil, err
 	}
-	holders, args := idList(ids)
-	rows, err := db.Query(fmt.Sprintf("SELECT id, value FROM %s WHERE id IN (%s)", table, holders), args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id int
-		var v string
-		if err := rows.Scan(&id, &v); err != nil {
+	for _, chunk := range idChunks(ids) {
+		rows, err := db.Query(fmt.Sprintf("SELECT id, value FROM %s WHERE id IN (%s)", table, placeholders(len(chunk))), chunk...)
+		if err != nil {
+			if isMissingDB(err) {
+				return res, nil
+			}
 			return nil, err
 		}
-		res[id] = v
+		for rows.Next() {
+			var id int
+			var v string
+			if err := rows.Scan(&id, &v); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			res[id] = v
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
 	}
-	return res, rows.Err()
+	return res, nil
 }
 
 // findIDs returns the ids of lookup rows matching value (exact, or LIKE when fuzzy).
 func (d *dbs) findIDs(group, name, table, value string, fuzzy bool) ([]interface{}, error) {
 	db, err := d.get(group, name)
 	if err != nil {
+		if isMissingDB(err) {
+			return []interface{}{}, nil
+		}
 		return nil, err
 	}
-	op, arg := "=", value
+	query := fmt.Sprintf("SELECT id FROM %s WHERE value = ? LIMIT %d", table, maxLookupIDs)
+	arg := value
 	if fuzzy {
-		op, arg = "LIKE", "%"+value+"%"
+		query = fmt.Sprintf(`SELECT id FROM %s WHERE value LIKE ? ESCAPE '\' LIMIT %d`, table, maxLookupIDs)
+		arg = "%" + escapeLike(value) + "%"
 	}
-	rows, err := db.Query(fmt.Sprintf("SELECT id FROM %s WHERE value %s ?", table, op), arg)
+	rows, err := db.Query(query, arg)
 	if err != nil {
+		if isMissingDB(err) {
+			return []interface{}{}, nil
+		}
 		return nil, err
 	}
 	defer rows.Close()
@@ -112,36 +158,54 @@ func (d *dbs) locations(ids map[int]bool) (map[int]location, error) {
 	}
 	db, err := d.get("global", "location")
 	if err != nil {
+		if isMissingDB(err) {
+			return res, nil
+		}
 		return nil, err
 	}
-	holders, args := idList(ids)
-	rows, err := db.Query("SELECT id, COALESCE(country_zh,''), COALESCE(province_zh,'') FROM locations WHERE id IN ("+holders+")", args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id int
-		var l location
-		if err := rows.Scan(&id, &l.Country, &l.Province); err != nil {
+	for _, chunk := range idChunks(ids) {
+		rows, err := db.Query("SELECT id, COALESCE(country_zh,''), COALESCE(province_zh,'') FROM locations WHERE id IN ("+placeholders(len(chunk))+")", chunk...)
+		if err != nil {
+			if isMissingDB(err) {
+				return res, nil
+			}
 			return nil, err
 		}
-		res[id] = l
+		for rows.Next() {
+			var id int
+			var l location
+			if err := rows.Scan(&id, &l.Country, &l.Province); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			res[id] = l
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
 	}
-	return res, rows.Err()
+	return res, nil
 }
 
 // locationIDs matches ip_location rows by country or province.
 func (d *dbs) locationIDs(value string) ([]interface{}, error) {
 	db, err := d.get("global", "location")
 	if err != nil {
+		if isMissingDB(err) {
+			return []interface{}{}, nil
+		}
 		return nil, err
 	}
-	like := "%" + value + "%"
+	like := "%" + escapeLike(value) + "%"
 	rows, err := db.Query(
-		"SELECT id FROM locations WHERE country_zh LIKE ? OR country_en LIKE ? OR province_zh LIKE ? OR province_en LIKE ? OR iso LIKE ?",
+		fmt.Sprintf(`SELECT id FROM locations WHERE country_zh LIKE ? ESCAPE '\' OR country_en LIKE ? ESCAPE '\' OR province_zh LIKE ? ESCAPE '\' OR province_en LIKE ? ESCAPE '\' OR iso LIKE ? ESCAPE '\' LIMIT %d`, maxLookupIDs),
 		like, like, like, like, like)
 	if err != nil {
+		if isMissingDB(err) {
+			return []interface{}{}, nil
+		}
 		return nil, err
 	}
 	defer rows.Close()
@@ -199,8 +263,15 @@ type AttackLogPage struct {
 // where builds the attack_logs filter. empty is true when a lookup filter matches nothing.
 func (q *LogQuery) where(d *dbs) (cond string, args []interface{}, empty bool, err error) {
 	conds := []string{"is_attack = 1"}
+	appendIn := func(col string, ids []interface{}) {
+		if rem := maxSQLVars - len(args); rem > 0 && len(ids) > rem {
+			ids = ids[:rem]
+		}
+		conds = append(conds, col+" IN ("+placeholders(len(ids))+")")
+		args = append(args, ids...)
+	}
 	add := func(col, group, name, table, value string, fuzzy bool) error {
-		if value == "" {
+		if value == "" || empty {
 			return nil
 		}
 		ids, err := d.findIDs(group, name, table, value, fuzzy)
@@ -211,8 +282,7 @@ func (q *LogQuery) where(d *dbs) (cond string, args []interface{}, empty bool, e
 			empty = true
 			return nil
 		}
-		conds = append(conds, col+" IN ("+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+")")
-		args = append(args, ids...)
+		appendIn(col, ids)
 		return nil
 	}
 	if err = add("website_id", "waf", "websites", "websites", q.Website, false); err != nil {
@@ -233,7 +303,7 @@ func (q *LogQuery) where(d *dbs) (cond string, args []interface{}, empty bool, e
 	if err = add("action_id", "global", "default", "actions", q.Action, false); err != nil {
 		return
 	}
-	if q.Location != "" {
+	if q.Location != "" && !empty {
 		ids, err := d.locationIDs(q.Location)
 		if err != nil {
 			return "", nil, false, err
@@ -241,8 +311,7 @@ func (q *LogQuery) where(d *dbs) (cond string, args []interface{}, empty bool, e
 		if len(ids) == 0 {
 			return "", nil, true, nil
 		}
-		conds = append(conds, "ip_location_id IN ("+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+")")
-		args = append(args, ids...)
+		appendIn("ip_location_id", ids)
 	}
 	if q.Start != "" {
 		conds = append(conds, "localtime >= ?")
@@ -256,10 +325,10 @@ func (q *LogQuery) where(d *dbs) (cond string, args []interface{}, empty bool, e
 }
 
 type logRow struct {
-	id                                                        int
-	localtime                                                 string
-	website, host, ip, rule, ruleType, match, uri, action     int
-	nginxLog, location, isBlock                               int
+	id                                                    int
+	localtime                                             string
+	website, host, ip, rule, ruleType, match, uri, action int
+	nginxLog, location, isBlock                           int
 }
 
 func SearchAttackLogs(openrestyPath string, q LogQuery) (*AttackLogPage, error) {
@@ -272,20 +341,32 @@ func SearchAttackLogs(openrestyPath string, q LogQuery) (*AttackLogPage, error) 
 	if q.Page < 1 {
 		q.Page = 1
 	}
-	if q.Size < 1 || q.Size > 100000 {
+	if q.Size < 1 {
 		q.Size = 20
 	}
+	if q.Size > 100000 {
+		q.Size = 100000
+	}
 	res := &AttackLogPage{Items: []AttackLog{}}
+	db, err := d.get("waf", "attack_logs")
+	if err != nil {
+		if isMissingDB(err) {
+			return res, nil
+		}
+		return nil, err
+	}
 	where, args, empty, err := q.where(d)
 	if err != nil || empty {
 		return res, err
 	}
-	db, err := d.get("waf", "attack_logs")
-	if err != nil {
+	if err := db.QueryRow("SELECT COUNT(*) FROM attack_logs WHERE "+where, args...).Scan(&res.Total); err != nil {
+		if isMissingDB(err) {
+			return res, nil
+		}
 		return nil, err
 	}
-	if err := db.QueryRow("SELECT COUNT(*) FROM attack_logs WHERE "+where, args...).Scan(&res.Total); err != nil {
-		return nil, err
+	if res.Total == 0 {
+		return res, nil
 	}
 	rows, err := db.Query(`SELECT id, COALESCE(localtime,''), website_id, host_id, ip_id, rule_id, rule_type_id, match_value_id,
  uri_id, action_id, nginx_log_id, ip_location_id, is_block FROM attack_logs WHERE `+where+" ORDER BY id DESC LIMIT ? OFFSET ?",
@@ -332,9 +413,8 @@ func SearchAttackLogs(openrestyPath string, q LogQuery) (*AttackLogPage, error) 
 	}
 	ngxs := map[int]ngx{}
 	if nl, err := d.get("waf", "nginx_logs"); err == nil {
-		holders, a := idList(ids(func(r logRow) int { return r.nginxLog }))
-		if len(a) > 0 {
-			if nrows, err := nl.Query("SELECT id, method_id, ua_id, status_code, COALESCE(nginx_log,'') FROM nginx_logs WHERE id IN ("+holders+")", a...); err == nil {
+		for _, chunk := range idChunks(ids(func(r logRow) int { return r.nginxLog })) {
+			if nrows, err := nl.Query("SELECT id, method_id, ua_id, status_code, COALESCE(nginx_log,'') FROM nginx_logs WHERE id IN ("+placeholders(len(chunk))+")", chunk...); err == nil {
 				for nrows.Next() {
 					var id int
 					var n ngx
@@ -367,15 +447,25 @@ func SearchAttackLogs(openrestyPath string, q LogQuery) (*AttackLogPage, error) 
 	return res, nil
 }
 
-// ClearLogs removes every interception record kept by the engine.
+// ClearLogs removes every interception and raw request record kept by the engine.
 func ClearLogs(openrestyPath string) error {
-	db, err := openDBRW(openrestyPath, "waf", "attack_logs")
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	if _, err := db.Exec("DELETE FROM attack_logs"); err != nil {
-		return err
+	for _, target := range []struct{ dbName, table string }{
+		{"attack_logs", "attack_logs"},
+		{"nginx_logs", "nginx_logs"},
+	} {
+		db, err := openDBRW(openrestyPath, "waf", target.dbName)
+		if err != nil {
+			if isMissingDB(err) {
+				continue
+			}
+			return err
+		}
+		_, execErr := db.Exec("DELETE FROM " + target.table)
+		_, _ = db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+		db.Close()
+		if execErr != nil && !isMissingDB(execErr) {
+			return execErr
+		}
 	}
 	return nil
 }
@@ -450,7 +540,7 @@ type Report struct {
 }
 
 // topBy groups attack_logs by an id column and resolves names with resolve.
-func topBy(d *dbs, db *sql.DB, col, where string, args []interface{},
+func topBy(db *sql.DB, col, where string, args []interface{},
 	resolve func(ids map[int]bool) (map[int]string, error)) ([]Bucket, error) {
 	rows, err := db.Query("SELECT "+col+", COUNT(*) c FROM attack_logs WHERE "+where+" GROUP BY "+col+" ORDER BY c DESC LIMIT 10", args...)
 	if err != nil {
@@ -480,57 +570,74 @@ func topBy(d *dbs, db *sql.DB, col, where string, args []interface{},
 	return res, nil
 }
 
+func sortAndCapBuckets(counts map[string]int, limit int) []Bucket {
+	out := make([]Bucket, 0, len(counts))
+	for name, cnt := range counts {
+		if name == "" || cnt <= 0 {
+			continue
+		}
+		out = append(out, Bucket{Name: name, Count: cnt})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Name < out[j].Name
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
 func LoadReport(openrestyPath string, q LogQuery) (*Report, error) {
 	d := newDBs(openrestyPath)
 	defer d.close()
 	res := &Report{Types: []Bucket{}, IPs: []Bucket{}, Websites: []Bucket{}, URIs: []Bucket{}, Countries: []Bucket{}, Provinces: []Bucket{}}
+	db, err := d.get("waf", "attack_logs")
+	if err != nil {
+		if isMissingDB(err) {
+			return res, nil
+		}
+		return nil, err
+	}
 	where, args, empty, err := q.where(d)
 	if err != nil || empty {
 		return res, err
 	}
-	db, err := d.get("waf", "attack_logs")
-	if err != nil {
+	if err := db.QueryRow("SELECT COUNT(*) FROM attack_logs WHERE "+where, args...).Scan(&res.Total); err != nil {
+		if isMissingDB(err) {
+			return res, nil
+		}
 		return nil, err
 	}
-	if err := db.QueryRow("SELECT COUNT(*) FROM attack_logs WHERE "+where, args...).Scan(&res.Total); err != nil {
-		return nil, err
+	if res.Total == 0 {
+		return res, nil
 	}
 	val := func(group, name, table string) func(map[int]bool) (map[int]string, error) {
 		return func(ids map[int]bool) (map[int]string, error) { return d.values(group, name, table, ids) }
 	}
-	if res.Types, err = topBy(d, db, "rule_type_id", where, args, val("waf", "rule_types", "rule_types")); err != nil {
+	if res.Types, err = topBy(db, "rule_type_id", where, args, val("waf", "rule_types", "rule_types")); err != nil {
 		return nil, err
 	}
-	if res.IPs, err = topBy(d, db, "ip_id", where, args, val("waf", "ips", "ips")); err != nil {
+	if res.IPs, err = topBy(db, "ip_id", where, args, val("waf", "ips", "ips")); err != nil {
 		return nil, err
 	}
-	if res.Websites, err = topBy(d, db, "website_id", where, args, val("waf", "websites", "websites")); err != nil {
+	if res.Websites, err = topBy(db, "website_id", where, args, val("waf", "websites", "websites")); err != nil {
 		return nil, err
 	}
-	if res.URIs, err = topBy(d, db, "uri_id", where, args, val("waf", "uris", "uris")); err != nil {
+	if res.URIs, err = topBy(db, "uri_id", where, args, val("waf", "uris", "uris")); err != nil {
 		return nil, err
 	}
-	res.Countries, err = topBy(d, db, "ip_location_id", where, args, func(ids map[int]bool) (map[int]string, error) {
-		locs, err := d.locations(ids)
-		out := map[int]string{}
-		for id, l := range locs {
-			out[id] = l.Country
-		}
-		return out, err
-	})
-	if err != nil {
-		return res, err
-	}
-	res.Provinces, err = topProvinces(d, db, where, args)
+	res.Countries, res.Provinces, err = topLocations(d, db, where, args)
 	return res, err
 }
 
-// topProvinces resolves the province distribution for sources located in mainland
-// China, which is what the overview's China map shades.
-func topProvinces(d *dbs, db *sql.DB, where string, args []interface{}) ([]Bucket, error) {
+// topLocations aggregates all matching ip_location_id counts by country and Chinese province.
+func topLocations(d *dbs, db *sql.DB, where string, args []interface{}) ([]Bucket, []Bucket, error) {
 	rows, err := db.Query("SELECT ip_location_id, COUNT(*) FROM attack_logs WHERE "+where+" GROUP BY ip_location_id", args...)
 	if err != nil {
-		return nil, err
+		return []Bucket{}, []Bucket{}, err
 	}
 	counts := map[int]int{}
 	ids := map[int]bool{}
@@ -538,27 +645,31 @@ func topProvinces(d *dbs, db *sql.DB, where string, args []interface{}) ([]Bucke
 		var id, c int
 		if err := rows.Scan(&id, &c); err != nil {
 			rows.Close()
-			return nil, err
+			return nil, nil, err
 		}
-		counts[id] = c
+		counts[id] += c
 		ids[id] = true
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, nil, err
+	}
 	rows.Close()
+
 	locs, err := d.locations(ids)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	out := []Bucket{}
-	for id, l := range locs {
-		if l.Country != "中国" || l.Province == "" {
-			continue
+	countryCounts := map[string]int{}
+	provinceCounts := map[string]int{}
+	for id, c := range counts {
+		l := locs[id]
+		if l.Country != "" {
+			countryCounts[l.Country] += c
 		}
-		out = append(out, Bucket{Name: l.Province, Count: counts[id]})
+		if l.Province != "" && (l.Country == "中国" || l.Country == "香港" || l.Country == "澳门" || l.Country == "台湾" || l.Country == "") {
+			provinceCounts[l.Province] += c
+		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Count > out[j].Count })
-	if len(out) > 10 {
-		out = out[:10]
-	}
-	return out, nil
+	return sortAndCapBuckets(countryCounts, 10), sortAndCapBuckets(provinceCounts, 34), nil
 }
-

@@ -179,8 +179,12 @@ func handleSnapshot(req dto.SnapshotCreate, taskItem *task.Task, jobID, retry, t
 		"SnapCloseDBConn",
 		func(t *task.Task) error {
 			taskItem.Log("---------------------- 6 / 8 ----------------------")
-			common.CloseDB(itemHelper.snapAgentDB)
-			common.CloseDB(itemHelper.snapCoreDB)
+			if itemHelper.snapAgentDB != nil {
+				common.CloseDB(itemHelper.snapAgentDB)
+			}
+			if itemHelper.snapCoreDB != nil {
+				common.CloseDB(itemHelper.snapCoreDB)
+			}
 			return nil
 		}, nil, int(retry), time.Duration(timeout)*time.Second,
 	)
@@ -269,15 +273,24 @@ func loadDbConn(snap *snapHelper, targetDir string, req dto.SnapshotCreate) erro
 	}
 	snap.snapAgentDB = agentDb
 	_ = snap.snapAgentDB.Model(&model.Setting{}).Where("key = ?", "SystemIP").Updates(map[string]interface{}{"value": ""}).Error
-	coreDb, err := common.LoadDBConnByPathWithErr(path.Join(targetDir, "db/core.db"), "core.db")
-	snap.Task.LogWithStatus(i18n.GetWithName("SnapNewDB", "core"), err)
-	if err != nil {
-		return err
+	coreDBFile := path.Join(targetDir, "db/core.db")
+	if global.IsMaster || snap.FileOp.Stat(coreDBFile) {
+		coreDb, err := common.LoadDBConnByPathWithErr(coreDBFile, "core.db")
+		snap.Task.LogWithStatus(i18n.GetWithName("SnapNewDB", "core"), err)
+		if err != nil {
+			if global.IsMaster {
+				return err
+			}
+		} else {
+			snap.snapCoreDB = coreDb
+		}
 	}
-	snap.snapCoreDB = coreDb
 
 	if !req.WithMonitorData {
 		err = os.Remove(path.Join(targetDir, "db/monitor.db"))
+		if err != nil && os.IsNotExist(err) {
+			err = nil
+		}
 		snap.Task.LogWithStatus(i18n.GetMsgByKey("SnapDeleteMonitor"), err)
 		if err != nil {
 			return err
@@ -285,10 +298,10 @@ func loadDbConn(snap *snapHelper, targetDir string, req dto.SnapshotCreate) erro
 	}
 	if !req.WithTaskLog {
 		err = os.Remove(path.Join(targetDir, "db/task.db"))
-		if err != nil {
+		if err != nil && !os.IsNotExist(err) {
 			return err
 		}
-	} else {
+	} else if snap.FileOp.Stat(path.Join(targetDir, "db/task.db")) {
 		taskDB, err := common.LoadDBConnByPathWithErr(path.Join(targetDir, "db/task.db"), "task.db")
 		snap.Task.LogWithStatus(i18n.GetWithName("SnapNewDB", "task"), err)
 		if err != nil {
@@ -297,14 +310,14 @@ func loadDbConn(snap *snapHelper, targetDir string, req dto.SnapshotCreate) erro
 		defer common.CloseDB(taskDB)
 		_ = taskDB.Where("id = ?", req.TaskID).Delete(&model.Task{}).Error
 	}
-	if !req.WithOperationLog && global.IsMaster {
+	if !req.WithOperationLog && global.IsMaster && snap.snapCoreDB != nil {
 		err = snap.snapCoreDB.Exec("DELETE FROM operation_logs").Error
 		snap.Task.LogWithStatus(i18n.GetMsgByKey("SnapDeleteOperationLog"), err)
 		if err != nil {
 			return err
 		}
 	}
-	if !req.WithLoginLog && global.IsMaster {
+	if !req.WithLoginLog && global.IsMaster && snap.snapCoreDB != nil {
 		err = snap.snapCoreDB.Exec("DELETE FROM login_logs").Error
 		snap.Task.LogWithStatus(i18n.GetMsgByKey("SnapDeleteLoginLog"), err)
 		if err != nil {
@@ -350,6 +363,26 @@ func snapBaseData(snap snapHelper, targetDir string, withDockerConf bool) error 
 	snap.Task.LogWithStatus(i18n.GetWithName("SnapCopy", svcAgentName), err)
 	if err != nil {
 		return err
+	}
+	if !global.IsMaster {
+		etcNodeDir := path.Join(targetDir, "etc_node")
+		if err := os.MkdirAll(etcNodeDir, 0o700); err != nil {
+			return err
+		}
+		for _, nodeFile := range []string{"/etc/1panel/node.json", "/etc/1panel/.nodeProxyID"} {
+			if snap.FileOp.Stat(nodeFile) {
+				if err := snap.FileOp.CopyFile(nodeFile, etcNodeDir); err != nil {
+					snap.Task.LogWithStatus(i18n.GetWithName("SnapCopy", nodeFile), err)
+					return err
+				}
+			}
+		}
+		if snap.FileOp.Stat("/etc/1panel/node") {
+			if err := snap.FileOp.CopyDir("/etc/1panel/node", etcNodeDir); err != nil {
+				snap.Task.LogWithStatus(i18n.GetWithName("SnapCopy", "/etc/1panel/node"), err)
+				return err
+			}
+		}
 	}
 	initScriptPath := path.Join(global.Dir.ResourceDir, "initscript")
 	if _, err := os.Stat(initScriptPath); err == nil {

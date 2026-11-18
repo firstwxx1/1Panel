@@ -203,14 +203,22 @@ export const searchSnapshotPage = (param: SearchWithPage) => {
 };
 
 // upgrade
-export const loadUpgradeInfo = () => {
-    return http.get<Setting.UpgradeInfo>(`/core/settings/upgrade`);
+export const loadUpgradeInfo = (skipErrorMessage = false) => {
+    return http.get<Setting.UpgradeInfo>(
+        `/core/settings/upgrade`,
+        {},
+        skipErrorMessage ? { skipErrorMessage: true } : {},
+    );
 };
 export const loadReleaseNotes = (version: string) => {
     return http.post<string>(`/core/settings/upgrade/notes`, { version: version });
 };
-export const listReleases = () => {
-    return http.get<Array<Setting.ReleasesNotes>>(`/core/settings/upgrade/releases`);
+export const listReleases = (skipErrorMessage = false) => {
+    return http.get<Array<Setting.ReleasesNotes>>(
+        `/core/settings/upgrade/releases`,
+        {},
+        skipErrorMessage ? { skipErrorMessage: true } : {},
+    );
 };
 export const upgrade = (version: string) => {
     return http.post(`/core/settings/upgrade`, { version: version });

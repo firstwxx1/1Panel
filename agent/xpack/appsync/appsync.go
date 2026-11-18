@@ -9,13 +9,24 @@ import (
 	"net/http"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/1Panel-dev/1Panel/agent/app/api/v2/helper"
 	"github.com/1Panel-dev/1Panel/agent/app/model"
+	"github.com/1Panel-dev/1Panel/agent/constant"
 	"github.com/1Panel-dev/1Panel/agent/global"
 	"github.com/gin-gonic/gin"
 )
+
+var safeIdentRule = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
+func validateSafeIdent(s string) error {
+	if s == "" || s == "." || s == ".." || !safeIdentRule.MatchString(s) {
+		return fmt.Errorf("invalid app identifier: %q", s)
+	}
+	return nil
+}
 
 type Meta struct {
 	Install model.AppInstall `json:"install"`
@@ -26,6 +37,9 @@ type Meta struct {
 }
 
 func loadInstall(name string) (*model.AppInstall, error) {
+	if err := validateSafeIdent(name); err != nil {
+		return nil, err
+	}
 	var in model.AppInstall
 	if err := global.DB.Where("name = ?", name).First(&in).Error; err != nil {
 		return nil, fmt.Errorf("app not found: %s", name)
@@ -65,18 +79,33 @@ type ImportReq struct {
 
 func importApp(req ImportReq) error {
 	in := req.Install
-	if in.Name == "" || req.AppKey == "" {
-		return fmt.Errorf("name and app key are required")
+	if err := validateSafeIdent(in.Name); err != nil {
+		return err
+	}
+	if err := validateSafeIdent(req.AppKey); err != nil {
+		return err
 	}
 	var n int64
 	global.DB.Model(&model.AppInstall{}).Where("name = ?", in.Name).Count(&n)
 	if n > 0 {
 		return fmt.Errorf("an app named %s is already installed on this node", in.Name)
 	}
+	if in.ContainerName != "" {
+		global.DB.Model(&model.AppInstall{}).Where("container_name = ?", in.ContainerName).Count(&n)
+		if n > 0 {
+			return fmt.Errorf("container name %s is already used by another app on this node", in.ContainerName)
+		}
+	}
 	if in.HttpPort > 0 {
-		global.DB.Model(&model.AppInstall{}).Where("http_port = ?", in.HttpPort).Count(&n)
+		global.DB.Model(&model.AppInstall{}).Where("http_port = ? OR https_port = ?", in.HttpPort, in.HttpPort).Count(&n)
 		if n > 0 {
 			return fmt.Errorf("port %d is already used by another app on this node", in.HttpPort)
+		}
+	}
+	if in.HttpsPort > 0 {
+		global.DB.Model(&model.AppInstall{}).Where("https_port = ? OR http_port = ?", in.HttpsPort, in.HttpsPort).Count(&n)
+		if n > 0 {
+			return fmt.Errorf("https port %d is already used by another app on this node", in.HttpsPort)
 		}
 	}
 	var app model.App
@@ -117,7 +146,19 @@ func Register(g *gin.RouterGroup) {
 	})
 	// where an app of this store key must be placed on this node
 	g.GET("/app/dir", func(c *gin.Context) {
-		in := model.AppInstall{Name: "x", App: model.App{Key: c.Query("key")}}
+		key := c.Query("key")
+		if err := validateSafeIdent(key); err != nil {
+			helper.BadRequest(c, err)
+			return
+		}
+		var app model.App
+		if err := global.DB.Where("`key` = ?", key).First(&app).Error; err != nil {
+			app = model.App{Key: key}
+			if strings.HasPrefix(key, constant.AppResourceLocal) {
+				app.Resource = constant.AppResourceLocal
+			}
+		}
+		in := model.AppInstall{Name: "x", App: app}
 		helper.SuccessWithData(c, in.GetAppPath())
 	})
 	g.POST("/app/import", func(c *gin.Context) {

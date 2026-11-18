@@ -21,7 +21,7 @@
                 </el-select>
             </div>
             <el-table :data="pageRows" v-loading="loading" @sort-change="onSort">
-                <el-table-column v-if="isMaster" prop="node" :label="$t('xpack.monitor.node')" sortable="custom" min-width="120">
+                <el-table-column v-if="isMaster" prop="node" :label="$t('pro.monitor.node')" sortable="custom" min-width="120">
                     <template #default="{ row }">{{ row.node || '-' }}</template>
                 </el-table-column>
                 <el-table-column prop="name" :label="$t('pro.monitor.website')" sortable="custom" min-width="160" />
