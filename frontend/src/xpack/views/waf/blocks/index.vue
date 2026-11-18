@@ -1,19 +1,35 @@
 <template>
     <div>
-        <el-card>
+        <el-card shadow="never">
             <div class="actions">
                 <div class="left">
-                    <el-button @click="clearAll">{{ $t('pro.waf.clearLogs') }}</el-button>
-                    <el-button :disabled="!selectedBlocking.length" type="primary" plain @click="unblock(selectedBlocking)">
+                    <el-button type="danger" plain @click="clearAll">{{ $t('pro.waf.clearLogs') }}</el-button>
+                    <el-button
+                        :disabled="!selectedBlocking.length"
+                        type="primary"
+                        plain
+                        @click="unblock(selectedBlocking)"
+                    >
                         {{ $t('pro.waf.batchUnblock') }}
                     </el-button>
-                    <el-button :disabled="!selected.length" @click="blockSelected">{{ $t('pro.waf.batchBlockIp') }}</el-button>
+                    <el-button :disabled="!selected.length" @click="blockSelected">
+                        {{ $t('pro.waf.batchBlockIp') }}
+                    </el-button>
                     <el-button @click="rangeDialog = true">{{ $t('pro.waf.batchBlockRange') }}</el-button>
                     <el-button plain type="primary" @click="exportCsv">{{ $t('pro.waf.exportLogs') }}</el-button>
                 </div>
                 <div class="right">
-                    <el-input v-model="query.ip" clearable :placeholder="$t('pro.waf.ipPlaceholder')" style="width: 170px" @change="search">
-                        <template #prefix><el-icon><Search /></el-icon></template>
+                    <el-input
+                        v-model="query.ip"
+                        clearable
+                        :placeholder="$t('pro.waf.ipPlaceholder')"
+                        style="width: 180px"
+                        @change="filter"
+                        @keyup.enter="filter"
+                    >
+                        <template #prefix>
+                            <el-icon><Search /></el-icon>
+                        </template>
                     </el-input>
                     <el-button :icon="Refresh" circle @click="search" />
                     <el-select v-model="refresh" style="width: 130px">
@@ -27,12 +43,27 @@
 
             <el-alert :title="$t('pro.waf.blockWarning')" type="warning" :closable="false" class="mb-3" />
 
-            <el-table :data="items" v-loading="loading" size="small" @selection-change="(v: WafBlockNode[]) => (selected = v)">
+            <el-table
+                :data="items"
+                v-loading="loading"
+                size="small"
+                @selection-change="(v: WafBlockNode[]) => (selected = v)"
+            >
                 <el-table-column type="selection" width="45" />
-                <el-table-column v-if="isMaster" prop="node" :label="$t('pro.monitor.node')" min-width="110" show-overflow-tooltip>
+                <el-table-column
+                    v-if="isMaster"
+                    prop="node"
+                    :label="$t('pro.monitor.node')"
+                    min-width="110"
+                    show-overflow-tooltip
+                >
                     <template #default="{ row }">{{ row.node || '-' }}</template>
                 </el-table-column>
-                <el-table-column prop="ip" label="IP" min-width="140" />
+                <el-table-column label="IP" min-width="140">
+                    <template #default="{ row }">
+                        <span class="mono">{{ row.ip }}</span>
+                    </template>
+                </el-table-column>
                 <el-table-column prop="blockedAt" :label="$t('pro.waf.time')" width="170" />
                 <el-table-column :label="$t('pro.waf.status')" width="110">
                     <template #default="{ row }">
@@ -49,10 +80,12 @@
                         {{ row.status === 'blocking' && row.remaining > 0 ? formatRemaining(row.remaining) : '-' }}
                     </template>
                 </el-table-column>
-                <el-table-column :label="$t('pro.waf.region')" min-width="120">
-                    <template #default="{ row }">{{ [row.country, row.province].filter(Boolean).join(' ') }}</template>
+                <el-table-column :label="$t('pro.waf.region')" min-width="120" show-overflow-tooltip>
+                    <template #default="{ row }">
+                        {{ [row.country, row.province].filter(Boolean).join(' ') || '-' }}
+                    </template>
                 </el-table-column>
-                <el-table-column :label="$t('pro.waf.hitRule')" min-width="120">
+                <el-table-column :label="$t('pro.waf.hitRule')" min-width="120" show-overflow-tooltip>
                     <template #default="{ row }">{{ ruleLabel(row.rule) }}</template>
                 </el-table-column>
                 <el-table-column :label="$t('commons.table.operate')" width="150" fixed="right">
@@ -148,6 +181,11 @@ const formatRemaining = (sec: number) => {
     return `${sec}${t('pro.waf.second')}`;
 };
 
+const filter = () => {
+    query.page = 1;
+    search();
+};
+
 const search = async () => {
     loading.value = true;
     try {
@@ -179,7 +217,8 @@ const unblock = async (rows: WafBlockNode[]) => {
 
 const blockSelected = async () => {
     for (const row of selected.value) {
-        const rule = { state: 'on', name: row.ip, rule: row.ip, type: 'ipv4' };
+        const type = row.ip.includes(':') ? 'ipv6' : 'ipv4';
+        const rule = { state: 'on', name: row.ip, rule: row.ip, type };
         if (row.node) {
             await nodeExec(row.node, '/xpack/waf/rules/save', { name: 'ipBlack', site: '', rule, oldId: '' });
         } else {
@@ -190,7 +229,8 @@ const blockSelected = async () => {
 };
 
 const addBlack = async (row: WafBlockNode) => {
-    const rule = { state: 'on', name: row.ip, rule: row.ip, type: 'ipv4' };
+    const type = row.ip.includes(':') ? 'ipv6' : 'ipv4';
+    const rule = { state: 'on', name: row.ip, rule: row.ip, type };
     if (row.node) {
         await nodeExec(row.node, '/xpack/waf/rules/save', { name: 'ipBlack', site: '', rule, oldId: '' });
     } else {
@@ -228,9 +268,13 @@ const exportCsv = async () => {
         const csv = (v: any) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
         const head = ['blockedAt', 'node', 'ip', 'status', 'blockingTime', 'remaining', 'country', 'province', 'rule'];
         const lines = res.items.map((r) =>
-            [r.blockedAt, r.node, r.ip, r.status, r.blockingTime, r.remaining, r.country, r.province, r.rule].map(csv).join(','),
+            [r.blockedAt, r.node, r.ip, r.status, r.blockingTime, r.remaining, r.country, r.province, r.rule]
+                .map(csv)
+                .join(','),
         );
-        const blob = new Blob(['\ufeff' + head.join(',') + '\n' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+        const blob = new Blob(['\ufeff' + head.join(',') + '\n' + lines.join('\n')], {
+            type: 'text/csv;charset=utf-8',
+        });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = 'waf-block.csv';
@@ -268,19 +312,31 @@ onBeforeUnmount(() => {
     gap: 8px;
     margin-bottom: 12px;
 }
+
 .left {
     display: flex;
+    align-items: center;
     flex-wrap: wrap;
     gap: 8px;
 }
+
+.left :deep(.el-button + .el-button) {
+    margin-left: 0;
+}
+
 .right {
     display: flex;
     align-items: center;
     gap: 8px;
 }
+
 .pager {
     display: flex;
     justify-content: flex-end;
     margin-top: 12px;
+}
+
+.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 </style>

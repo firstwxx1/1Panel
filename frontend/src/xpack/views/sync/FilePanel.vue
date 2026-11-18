@@ -1,36 +1,72 @@
 <template>
     <el-card shadow="never" class="panel">
+        <template #header>
+            <div class="pane-head">
+                <div class="pane-title">
+                    <span class="pane-dot" :class="side" />
+                    <span>{{ side === 'right' ? $t('pro.sync.rightPane') : $t('pro.sync.leftPane') }}</span>
+                    <el-tag v-if="selected.length" size="small" type="primary" effect="light">
+                        {{ $t('pro.sync.selectedCount', { n: selected.length }) }}
+                    </el-tag>
+                </div>
+                <span v-if="currentNodeAddr" class="pane-addr mono">{{ currentNodeAddr }}</span>
+            </div>
+        </template>
+
         <div class="bar">
-            <el-select v-model="node" style="width: 160px" @change="goHome">
+            <el-select v-model="node" style="width: 170px; flex-shrink: 0" @change="goHome">
                 <el-option v-for="n in nodes" :key="n.name" :label="n.name" :value="n.name" />
             </el-select>
-            <el-input v-model="keyword" clearable :placeholder="$t('pro.sync.search')" @keyup.enter="load" @clear="load" />
-            <el-button :icon="Refresh" @click="load" />
+            <el-input
+                v-model="keyword"
+                clearable
+                :placeholder="$t('pro.sync.search')"
+                @keyup.enter="load"
+                @clear="load"
+            />
+            <el-button :icon="Refresh" circle :loading="loading" @click="load" />
         </div>
-        <div class="crumb">
-            <el-link type="primary" @click="goHome">/</el-link>
+
+        <div class="crumb mono">
+            <el-icon class="crumb-icon"><FolderOpened /></el-icon>
+            <el-link type="primary" :underline="false" @click="goHome">/</el-link>
             <template v-for="(seg, i) in segments" :key="i">
-                <span>/</span>
-                <el-link type="primary" @click="goSeg(i)">{{ seg }}</el-link>
+                <span class="crumb-sep">/</span>
+                <el-link type="primary" :underline="false" @click="goSeg(i)">{{ seg }}</el-link>
             </template>
         </div>
-        <el-table :data="rows" v-loading="loading" height="360" @selection-change="(v: Row[]) => (selected = v)">
-            <el-table-column type="selection" width="40" />
-            <el-table-column :label="$t('pro.sync.name')" min-width="180">
+
+        <el-table :data="rows" v-loading="loading" height="380" @selection-change="(v: Row[]) => (selected = v)">
+            <el-table-column type="selection" width="42" />
+            <el-table-column :label="$t('pro.sync.name')" min-width="180" show-overflow-tooltip>
                 <template #default="{ row }">
-                    <el-link v-if="row.isDir" type="primary" @click="open(row)">📁 {{ row.name }}</el-link>
-                    <span v-else>{{ row.name }}</span>
+                    <el-link v-if="row.isDir" type="primary" :underline="false" class="entry-link" @click="open(row)">
+                        <el-icon class="dir-icon"><Folder /></el-icon>
+                        <span>{{ row.name }}</span>
+                    </el-link>
+                    <span v-else class="entry-file">
+                        <el-icon class="file-icon"><Document /></el-icon>
+                        <span>{{ row.name }}</span>
+                    </span>
                 </template>
             </el-table-column>
             <el-table-column :label="$t('pro.sync.size')" width="100">
-                <template #default="{ row }">{{ row.isDir ? '-' : fmt(row.size) }}</template>
-            </el-table-column>
-            <el-table-column :label="$t('pro.sync.operation')" width="110">
                 <template #default="{ row }">
-                    <el-button link type="primary" @click="$emit('send', [row])">{{ $t('pro.sync.transferTo') }}</el-button>
+                    <span class="size-cell">{{ row.isDir ? '-' : fmt(row.size) }}</span>
                 </template>
             </el-table-column>
+            <el-table-column :label="$t('pro.sync.operation')" width="105" fixed="right">
+                <template #default="{ row }">
+                    <el-button link type="primary" @click="$emit('send', [row])">
+                        {{ $t('pro.sync.transferTo') }}
+                    </el-button>
+                </template>
+            </el-table-column>
+            <template #empty>
+                <el-empty :image-size="48" :description="$t('commons.msg.noneData')" />
+            </template>
         </el-table>
+
         <el-pagination
             class="pager"
             v-model:current-page="page"
@@ -38,6 +74,7 @@
             :total="total"
             :page-sizes="[20, 50, 100]"
             layout="total, sizes, prev, pager, next"
+            small
             @change="load"
         />
     </el-card>
@@ -45,17 +82,26 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { Refresh } from '@element-plus/icons-vue';
+import { Document, Folder, FolderOpened, Refresh } from '@element-plus/icons-vue';
 import { nodeQuery, NodeRow } from '@/xpack/api/node';
 
-interface Row {
+export interface Row {
     name: string;
     path: string;
     isDir: boolean;
     size: number;
 }
 
-const props = defineProps<{ nodes: NodeRow[]; initNode: string }>();
+const props = withDefaults(
+    defineProps<{
+        nodes: NodeRow[];
+        initNode: string;
+        side?: 'left' | 'right';
+    }>(),
+    {
+        side: 'left',
+    },
+);
 defineEmits<{ (e: 'send', rows: Row[]): void }>();
 
 const node = ref(props.initNode);
@@ -67,6 +113,11 @@ const loading = ref(false);
 const page = ref(1);
 const size = ref(50);
 const total = ref(0);
+
+const currentNodeAddr = computed(() => {
+    const found = props.nodes.find((n) => n.name === node.value);
+    return found?.addr || (found?.isLocal ? '127.0.0.1' : '');
+});
 
 const segments = computed(() => path.value.split('/').filter(Boolean));
 const fmt = (n: number) => {
@@ -124,7 +175,7 @@ watch(
     },
 );
 onMounted(load);
-defineExpose({ node, path, selected, load });
+defineExpose({ node, path, selected, load, goHome });
 </script>
 
 <style scoped>
@@ -132,8 +183,39 @@ defineExpose({ node, path, selected, load });
     flex: 1;
     min-width: 0;
 }
+.pane-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.pane-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--el-text-color-primary);
+}
+.pane-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--el-color-primary);
+}
+.pane-dot.right {
+    background: var(--el-color-success);
+}
+.pane-addr {
+    font-size: 12px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    color: var(--el-text-color-secondary);
+    background: var(--el-fill-color-light);
+}
 .bar {
     display: flex;
+    align-items: center;
     gap: 8px;
     margin-bottom: 10px;
 }
@@ -141,8 +223,44 @@ defineExpose({ node, path, selected, load });
     display: flex;
     align-items: center;
     gap: 4px;
-    margin-bottom: 8px;
+    padding: 6px 10px;
+    margin-bottom: 10px;
+    border-radius: 4px;
+    font-size: 12.5px;
+    background: var(--el-fill-color-lighter);
+    border: 1px solid var(--el-border-color-extra-light);
     flex-wrap: wrap;
+}
+.crumb-icon {
+    color: var(--el-color-warning);
+    margin-right: 2px;
+}
+.crumb-sep {
+    color: var(--el-text-color-placeholder);
+}
+.entry-link,
+.entry-file {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.dir-icon {
+    color: var(--el-color-warning);
+    font-size: 15px;
+    flex-shrink: 0;
+}
+.file-icon {
+    color: var(--el-text-color-secondary);
+    font-size: 14px;
+    flex-shrink: 0;
+}
+.size-cell {
+    font-variant-numeric: tabular-nums;
+    font-size: 12.5px;
+    color: var(--el-text-color-regular);
+}
+.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 .pager {
     margin-top: 10px;

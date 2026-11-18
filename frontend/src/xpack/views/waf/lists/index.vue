@@ -1,33 +1,80 @@
 <template>
     <div>
         <NodeTargetBar v-model="targetNode" @change="reset" />
-        <el-card>
+        <el-card shadow="never">
             <el-tabs v-model="name" @tab-change="reset">
                 <el-tab-pane v-for="n in names" :key="n" :label="$t('pro.waf.list_' + n)" :name="n" />
             </el-tabs>
-            <div class="mb-3">
-                <el-button type="primary" @click="openAdd">{{ $t('commons.button.add') }}</el-button>
-                <el-button :disabled="selected.length === 0" @click="removeSelected">{{ $t('commons.button.delete') }}</el-button>
-                <el-input v-model="keyword" class="ml-3" style="width: 240px" clearable :placeholder="$t('commons.button.search')" @change="load" />
+
+            <div class="toolbar">
+                <div class="toolbar-left">
+                    <el-button type="primary" @click="openAdd">{{ $t('commons.button.add') }}</el-button>
+                    <el-button type="danger" plain :disabled="selected.length === 0" @click="removeSelected">
+                        {{ $t('commons.button.delete') }}
+                    </el-button>
+                </div>
+                <div class="toolbar-right">
+                    <el-input
+                        v-model="keyword"
+                        style="width: 240px"
+                        clearable
+                        :placeholder="$t('commons.button.search')"
+                        @change="reset"
+                        @keyup.enter="reset"
+                    >
+                        <template #prefix>
+                            <el-icon><Search /></el-icon>
+                        </template>
+                    </el-input>
+                    <el-button :icon="Refresh" circle @click="load" />
+                </div>
             </div>
-            <el-table :data="items" v-loading="loading" size="small" @selection-change="(v: WafRule[]) => (selected = v)">
+
+            <el-table
+                :data="items"
+                v-loading="loading"
+                size="small"
+                @selection-change="(v: WafRule[]) => (selected = v)"
+            >
                 <el-table-column type="selection" width="45" />
-                <el-table-column prop="rule" :label="$t('pro.waf.rule')" show-overflow-tooltip />
-                <el-table-column prop="name" :label="$t('pro.waf.remark')" show-overflow-tooltip />
+                <el-table-column :label="$t('pro.waf.rule')" min-width="240" show-overflow-tooltip>
+                    <template #default="{ row }">
+                        <span class="mono">{{ row.rule }}</span>
+                    </template>
+                </el-table-column>
+                <el-table-column prop="name" :label="$t('pro.waf.remark')" min-width="160" show-overflow-tooltip />
                 <el-table-column :label="$t('pro.waf.status')" width="100">
                     <template #default="{ row }">
                         <el-switch :model-value="row.state === 'on'" @change="(v: any) => toggle(row, Boolean(v))" />
                     </template>
                 </el-table-column>
-                <el-table-column :label="$t('commons.table.operate')" width="140">
+                <el-table-column :label="$t('commons.table.operate')" width="140" fixed="right">
                     <template #default="{ row }">
                         <el-button link type="primary" @click="openEdit(row)">{{ $t('commons.button.edit') }}</el-button>
-                        <el-button link type="danger" @click="remove([row])">{{ $t('commons.button.delete') }}</el-button>
+                        <el-button link type="danger" @click="remove([row])">
+                            {{ $t('commons.button.delete') }}
+                        </el-button>
                     </template>
                 </el-table-column>
             </el-table>
-            <el-pagination class="mt-3" v-model:current-page="page" v-model:page-size="size" :total="total" layout="total, prev, pager, next, sizes" @change="load" />
-            <el-dialog v-model="dialog" :title="editing ? $t('commons.button.edit') : $t('commons.button.add')" width="480px">
+
+            <div class="pager">
+                <el-pagination
+                    v-model:current-page="page"
+                    v-model:page-size="size"
+                    :total="total"
+                    :page-sizes="[20, 50, 100]"
+                    layout="total, sizes, prev, pager, next, jumper"
+                    small
+                    @change="load"
+                />
+            </div>
+
+            <el-dialog
+                v-model="dialog"
+                :title="editing ? $t('commons.button.edit') : $t('commons.button.add')"
+                width="480px"
+            >
                 <el-form label-position="top">
                     <el-form-item :label="$t('pro.waf.rule')">
                         <el-input v-model="form.rule" type="textarea" :rows="3" />
@@ -48,6 +95,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
+import { Refresh, Search } from '@element-plus/icons-vue';
 import { useI18n } from 'vue-i18n';
 import { GlobalStore } from '@/store';
 import NodeTargetBar from '@/xpack/components/NodeTargetBar.vue';
@@ -154,3 +202,36 @@ const removeSelected = () => remove(selected.value);
 
 onMounted(load);
 </script>
+
+<style scoped>
+.toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.toolbar-left,
+.toolbar-right {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.toolbar-left :deep(.el-button + .el-button) {
+    margin-left: 0;
+}
+
+.pager {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 12px;
+}
+
+.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+</style>

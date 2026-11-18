@@ -3,23 +3,35 @@
         <div class="head">
             <div class="title">
                 <span class="bar" />
-                <span>{{ title }}</span>
+                <span class="title-text">{{ title }}</span>
                 <span class="count">{{ total }}</span>
             </div>
             <div class="tools">
                 <slot name="tools" />
-                <el-input v-model="info" clearable size="small" :placeholder="$t('pro.node.search')" style="width: 160px" @keyup.enter="reload" @clear="reload">
+                <el-input
+                    v-model="info"
+                    clearable
+                    size="small"
+                    :placeholder="$t('pro.node.search')"
+                    style="width: 155px"
+                    @keyup.enter="reload"
+                    @clear="reload"
+                >
                     <template #append>
                         <el-button :icon="Search" @click="reload" />
                     </template>
                 </el-input>
-                <el-button size="small" :icon="Refresh" circle @click="load" />
+                <el-button size="small" :icon="Refresh" circle :loading="loading" @click="load" />
             </div>
         </div>
-        <el-table :data="items" v-loading="loading" size="small" :max-height="320">
-            <slot />
-            <template #empty>{{ $t('pro.node.noData') }}</template>
-        </el-table>
+        <div class="table-wrap">
+            <el-table :data="items" v-loading="loading" size="small" :max-height="280">
+                <slot />
+                <template #empty>
+                    <el-empty :image-size="40" :description="$t('pro.node.noData')" />
+                </template>
+            </el-table>
+        </div>
         <div v-if="total > pageSize" class="pager">
             <el-pagination
                 v-model:current-page="page"
@@ -86,19 +98,32 @@ watch(
 
 <style scoped>
 .section {
-    margin-bottom: 12px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+.section :deep(.el-card__body) {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
 }
 .head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
     margin-bottom: 10px;
 }
 .title {
     display: flex;
     align-items: center;
     gap: 8px;
-    font-weight: 500;
+}
+.title-text {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--el-text-color-primary);
 }
 .bar {
     width: 3px;
@@ -108,18 +133,23 @@ watch(
 }
 .count {
     min-width: 22px;
-    padding: 0 6px;
+    padding: 0 7px;
     text-align: center;
     border-radius: 10px;
     font-size: 12px;
+    font-weight: 600;
     line-height: 18px;
     color: var(--el-color-primary);
     background: var(--el-color-primary-light-9);
 }
 .tools {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+}
+.table-wrap {
+    flex: 1;
 }
 .pager {
     display: flex;

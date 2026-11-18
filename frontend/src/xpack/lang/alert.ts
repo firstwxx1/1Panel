@@ -54,6 +54,9 @@ const messages = {
         sentNo: '未发送',
         clear: '清空记录',
         refresh: '刷新',
+        enabled: '已启用',
+        disabled: '未启用',
+        activeRules: '已启用 {on}/{total}',
     },
     en: {
         title: 'Alert Notifications',
@@ -108,6 +111,9 @@ const messages = {
         sentNo: 'Unsent',
         clear: 'Clear History',
         refresh: 'Refresh',
+        enabled: 'Enabled',
+        disabled: 'Disabled',
+        activeRules: '{on}/{total} active',
     },
 };
 

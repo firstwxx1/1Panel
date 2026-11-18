@@ -43,6 +43,9 @@ const messages = {
         a_restore_failed: '恢复失败',
         noBaseline: '未建立',
         save: '保存',
+        enabled: '已启用',
+        disabled: '未启用',
+        siteCount: '共 {n} 个网站',
     },
     en: {
         title: 'Tamper Protection',
@@ -86,6 +89,9 @@ const messages = {
         a_restore_failed: 'Restore Failed',
         noBaseline: 'Not built',
         save: 'Save',
+        enabled: 'Enabled',
+        disabled: 'Disabled',
+        siteCount: '{n} websites',
     },
 };
 

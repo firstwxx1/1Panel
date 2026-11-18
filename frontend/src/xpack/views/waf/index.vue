@@ -1,15 +1,15 @@
 <template>
     <div>
-        <el-tabs v-model="activeTab" type="card" class="mb-3">
-            <el-tab-pane v-for="tab in tabs" :key="tab.key" :label="$t('pro.waf.' + tab.key)" :name="tab.key" />
-        </el-tabs>
+        <ProTabBar v-model="activeTab" :tabs="tabItems" />
         <component :is="current" :key="`${activeTab}-${globalStore.currentNode}`" />
     </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { GlobalStore } from '@/store';
+import ProTabBar from '@/xpack/components/ProTabBar.vue';
 import Overview from './overview/index.vue';
 import Report from './report/index.vue';
 import Logs from './logs/index.vue';
@@ -18,6 +18,7 @@ import Lists from './lists/index.vue';
 import SiteSetting from './settings/site.vue';
 import GlobalSetting from './settings/global.vue';
 
+const { t } = useI18n();
 const globalStore = GlobalStore();
 const tabs = [
     { key: 'overview', comp: Overview },
@@ -28,6 +29,7 @@ const tabs = [
     { key: 'siteSetting', comp: SiteSetting },
     { key: 'globalSetting', comp: GlobalSetting },
 ];
+const tabItems = computed(() => tabs.map((x) => ({ key: x.key, label: t('pro.waf.' + x.key) })));
 const activeTab = ref('overview');
-const current = computed(() => tabs.find((t) => t.key === activeTab.value)?.comp);
+const current = computed(() => tabs.find((x) => x.key === activeTab.value)?.comp);
 </script>

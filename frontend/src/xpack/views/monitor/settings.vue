@@ -2,7 +2,7 @@
     <div>
         <NodeTargetBar v-model="targetNode" @change="onNodeChange" />
         <el-card shadow="never" v-loading="loading">
-            <div class="mb-3">
+            <div class="mb-4">
                 <el-radio-group v-model="scope">
                     <el-radio-button value="global">{{ $t('pro.monitor.globalSettings') }}</el-radio-button>
                     <el-radio-button value="site">{{ $t('pro.monitor.siteSettings') }}</el-radio-button>
@@ -12,65 +12,85 @@
                 <template v-if="scope === 'global'">
                     <div class="row">
                         <span class="label">{{ $t('pro.monitor.state') }}</span>
-                        <el-switch :model-value="cfg.enabled" @change="toggleGlobal" />
+                        <div class="control">
+                            <el-switch :model-value="cfg.enabled" @change="toggleGlobal" />
+                        </div>
                     </div>
                     <div v-for="f in numberFields" :key="f.key" class="row">
                         <span class="label">{{ f.label }}</span>
-                        <el-input :model-value="String((cfg as any)[f.key])" readonly class="field">
-                            <template #append>
-                                <el-button :icon="Setting" @click="edit(f, 'global')">{{ $t('pro.monitor.set') }}</el-button>
-                            </template>
-                        </el-input>
-                        <div class="hint">{{ f.hint }}</div>
+                        <div class="control">
+                            <el-input :model-value="String((cfg as any)[f.key])" readonly class="field">
+                                <template #append>
+                                    <el-button :icon="Setting" @click="edit(f, 'global')">{{ $t('pro.monitor.set') }}</el-button>
+                                </template>
+                            </el-input>
+                            <div class="hint">{{ f.hint }}</div>
+                        </div>
                     </div>
                     <div v-for="f in listFields" :key="f.key" class="row">
                         <span class="label">{{ f.label }}</span>
-                        <el-input :model-value="join((cfg as any)[f.key])" readonly class="field">
-                            <template #append>
-                                <el-button :icon="Setting" @click="edit(f, 'global')">{{ $t('pro.monitor.set') }}</el-button>
-                            </template>
-                        </el-input>
-                        <div class="hint">{{ f.hint }}</div>
+                        <div class="control">
+                            <el-input :model-value="join((cfg as any)[f.key])" readonly class="field">
+                                <template #append>
+                                    <el-button :icon="Setting" @click="edit(f, 'global')">{{ $t('pro.monitor.set') }}</el-button>
+                                </template>
+                            </el-input>
+                            <div v-if="f.hint" class="hint">{{ f.hint }}</div>
+                        </div>
                     </div>
                     <div class="row">
                         <span class="label">{{ $t('pro.monitor.cdn') }}</span>
-                        <el-switch v-model="cfg.cdn" @change="save" />
-                        <div class="hint">{{ $t('pro.monitor.cdnHelp') }}</div>
+                        <div class="control">
+                            <el-switch v-model="cfg.cdn" @change="save" />
+                            <div class="hint">{{ $t('pro.monitor.cdnHelp') }}</div>
+                        </div>
                     </div>
                     <div class="row">
                         <span class="label">{{ $t('pro.monitor.rtTitle') }}</span>
-                        <el-tag v-if="hasRt" type="success" effect="light">{{ $t('pro.monitor.rtOn') }}</el-tag>
-                        <el-button v-else type="primary" plain @click="enableRt">{{ $t('pro.monitor.rtEnable') }}</el-button>
-                        <div v-if="!hasRt" class="hint">{{ $t('pro.monitor.rtOff') }}</div>
+                        <div class="control">
+                            <el-tag v-if="hasRt" type="success" effect="light">{{ $t('pro.monitor.rtOn') }}</el-tag>
+                            <el-button v-else type="primary" plain @click="enableRt">{{ $t('pro.monitor.rtEnable') }}</el-button>
+                            <div v-if="!hasRt" class="hint">{{ $t('pro.monitor.rtOff') }}</div>
+                        </div>
                     </div>
                 </template>
                 <template v-else>
                     <div class="row">
                         <span class="label">{{ $t('pro.monitor.website') }}</span>
-                        <SiteSelect v-model="site" :sites="siteList" />
+                        <div class="control">
+                            <SiteSelect v-model="site" :sites="siteList" />
+                        </div>
                     </div>
                     <template v-if="site">
                         <div class="row">
                             <span class="label">{{ $t('pro.monitor.state') }}</span>
-                            <el-switch v-model="cfg.sites[site]" :disabled="!cfg.enabled" @change="save" />
-                            <div v-if="!cfg.enabled" class="hint">{{ $t('pro.monitor.needGlobal') }}</div>
+                            <div class="control">
+                                <el-switch v-model="cfg.sites[site]" :disabled="!cfg.enabled" @change="save" />
+                                <div v-if="!cfg.enabled" class="hint">{{ $t('pro.monitor.needGlobal') }}</div>
+                            </div>
                         </div>
                         <div v-for="f in listFields" :key="f.key" class="row">
                             <span class="label">{{ f.label }}</span>
-                            <el-input :model-value="join(rules[f.key])" readonly class="field">
-                                <template #append>
-                                    <el-button :icon="Setting" @click="edit(f, 'site')">{{ $t('pro.monitor.set') }}</el-button>
-                                </template>
-                            </el-input>
-                            <div class="hint">{{ $t('pro.monitor.siteExtra') }}</div>
+                            <div class="control">
+                                <el-input :model-value="join(rules[f.key])" readonly class="field">
+                                    <template #append>
+                                        <el-button :icon="Setting" @click="edit(f, 'site')">{{ $t('pro.monitor.set') }}</el-button>
+                                    </template>
+                                </el-input>
+                                <div class="hint">{{ $t('pro.monitor.siteExtra') }}</div>
+                            </div>
                         </div>
                         <div class="row">
                             <span class="label">{{ $t('pro.monitor.cdn') }}</span>
-                            <el-switch v-model="rules.cdn" @change="save" />
+                            <div class="control">
+                                <el-switch v-model="rules.cdn" @change="save" />
+                            </div>
                         </div>
                         <div class="row">
                             <span class="label">{{ $t('pro.monitor.clearSite') }}</span>
-                            <el-button type="danger" plain @click="clear">{{ $t('pro.monitor.clearLog') }}</el-button>
+                            <div class="control">
+                                <el-button type="danger" plain @click="clear">{{ $t('pro.monitor.clearLog') }}</el-button>
+                            </div>
                         </div>
                     </template>
                     <el-empty v-else :image-size="48" :description="$t('pro.monitor.noSite')" />
@@ -94,6 +114,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { Setting } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { useI18n } from 'vue-i18n';
 import { GlobalStore } from '@/store';
 import NodeTargetBar from '@/xpack/components/NodeTargetBar.vue';
 import SiteSelect from './SiteSelect.vue';
@@ -106,10 +127,9 @@ import {
     MonSettings,
     MonSiteItem,
 } from '@/xpack/api/monitor';
-import i18n from '@/lang';
 
 const emit = defineEmits(['changed']);
-const t = i18n.global.t;
+const { t } = useI18n();
 const globalStore = GlobalStore();
 const targetNode = ref(globalStore.currentNode || 'local');
 const loading = ref(false);
@@ -240,28 +260,45 @@ onMounted(load);
 <style scoped>
 .row {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 12px;
+    align-items: flex-start;
+    gap: 16px;
     margin-bottom: 18px;
 }
 .label {
-    width: 180px;
+    width: 170px;
     flex-shrink: 0;
+    padding-top: 6px;
+    font-size: 13.5px;
+    color: var(--el-text-color-regular);
+}
+.control {
+    flex: 1;
+    min-width: 0;
 }
 .field {
     width: 540px;
+    max-width: 100%;
 }
 .hint {
-    width: 100%;
-    margin-left: 192px;
-    margin-top: -10px;
+    margin-top: 6px;
     font-size: 12px;
+    line-height: 1.5;
     color: var(--el-text-color-secondary);
 }
 .hint-dialog {
     margin-top: 8px;
     font-size: 12px;
     color: var(--el-text-color-secondary);
+}
+
+@media (max-width: 640px) {
+    .row {
+        flex-direction: column;
+        gap: 6px;
+    }
+    .label {
+        width: auto;
+        padding-top: 0;
+    }
 }
 </style>

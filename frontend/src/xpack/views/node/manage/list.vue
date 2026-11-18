@@ -1,7 +1,7 @@
 <template>
     <div>
-        <el-card>
-            <el-alert v-if="kind === 'panels'" type="info" :closable="false" class="mb-3" :title="$t('pro.node.panelTip')" />
+        <el-card shadow="never">
+            <el-alert v-if="kind === 'panels'" type="info" show-icon :closable="false" class="mb-3" :title="$t('pro.node.panelTip')" />
             <div class="bar">
                 <div class="left">
                     <el-button type="primary" @click="openAdd">
@@ -11,38 +11,39 @@
                         {{ selectedBoundNodes.length ? $t('pro.node.upgradeSelected', { n: selectedBoundNodes.length }) : $t('pro.node.batchUpgrade') }}
                     </el-button>
                     <el-button :disabled="!selected.length" @click="openGroup">{{ $t('pro.node.group') }}</el-button>
-                    <el-button :disabled="!selected.length" @click="removeSelected">{{ $t('pro.node.delete') }}</el-button>
+                    <el-button type="danger" plain :disabled="!selected.length" @click="removeSelected">{{ $t('pro.node.delete') }}</el-button>
                 </div>
                 <div class="right">
                     <el-select v-model="query.groupID" style="width: 140px" @change="filter">
                         <el-option :value="0" :label="$t('pro.node.allGroups')" />
                         <el-option v-for="g in groups" :key="g.id" :value="g.id" :label="groupLabel(g)" />
                     </el-select>
-                    <el-input v-model="query.info" clearable :placeholder="$t('pro.node.search')" style="width: 180px" @keyup.enter="filter" @clear="filter">
+                    <el-input v-model="query.info" clearable :placeholder="$t('pro.node.search')" style="width: 190px" @keyup.enter="filter" @clear="filter">
                         <template #append>
                             <el-button :icon="Search" @click="filter" />
                         </template>
                     </el-input>
-                    <el-button :icon="Refresh" circle @click="search()" />
-                    <el-select v-model="refresh" style="width: 120px">
+                    <el-select v-model="refresh" style="width: 115px">
                         <el-option :value="0" :label="$t('pro.node.noRefresh')" />
                         <el-option :value="10" label="10s" />
                         <el-option :value="30" label="30s" />
                         <el-option :value="60" label="60s" />
                     </el-select>
+                    <el-button :icon="Refresh" circle :loading="loading" @click="search()" />
                 </div>
             </div>
 
             <el-table :data="items" v-loading="loading || upgrading" @selection-change="(v: NodeRow[]) => (selected = v)">
                 <el-table-column type="selection" width="45" :selectable="(row: NodeRow) => !row.isLocal" />
-                <el-table-column :label="$t('pro.node.name')" min-width="160">
+                <el-table-column :label="$t('pro.node.name')" min-width="175">
                     <template #default="{ row }">
                         <div class="name">
-                            <span>{{ row.isLocal ? globalStore.getMasterAlias() : row.name }}</span>
+                            <span class="name-text">{{ row.isLocal ? globalStore.getMasterAlias() : row.name }}</span>
+                            <el-tag v-if="row.isLocal" size="small" type="primary" effect="plain">{{ $t('pro.node.master') }}</el-tag>
                             <el-icon v-if="!row.isLocal" class="edit" @click="openEdit(row)"><Edit /></el-icon>
                         </div>
-                        <div class="sub">
-                            {{ kind === 'panels' && row.port ? `${formatHost(row.addr)}:${row.port}` : row.addr }}
+                        <div class="sub mono">
+                            {{ kind === 'panels' && row.port ? `${formatHost(row.addr)}:${row.port}` : row.addr || '127.0.0.1' }}
                         </div>
                     </template>
                 </el-table-column>
@@ -63,14 +64,24 @@
                         <template v-else>{{ row.version || '-' }}</template>
                     </template>
                 </el-table-column>
-                <el-table-column :label="$t('pro.node.resource')" min-width="170">
+                <el-table-column :label="$t('pro.node.resource')" min-width="195">
                     <template #default="{ row }">
-                        <template v-if="row.cpuTotal">
-                            <div>CPU: {{ row.cpuTotal }} {{ $t('pro.node.cores') }} ({{ row.cpuUsedPercent.toFixed(2) }}%)</div>
-                            <div>
-                                {{ $t('pro.node.memory') }}: {{ gb(row.memoryTotal) }} ({{ row.memoryUsedPercent.toFixed(2) }}%)
+                        <div v-if="row.cpuTotal" class="res-cell">
+                            <div class="res-line">
+                                <span>CPU {{ row.cpuUsedPercent.toFixed(1) }}%</span>
+                                <span class="sub">{{ row.cpuTotal }} {{ $t('pro.node.cores') }}</span>
                             </div>
-                        </template>
+                            <div class="res-bar">
+                                <div class="res-fill" :class="usageTone(row.cpuUsedPercent)" :style="{ width: `${clampPct(row.cpuUsedPercent)}%` }" />
+                            </div>
+                            <div class="res-line mt-1">
+                                <span>{{ $t('pro.node.memory') }} {{ row.memoryUsedPercent.toFixed(1) }}%</span>
+                                <span class="sub">{{ gb(row.memoryTotal) }}</span>
+                            </div>
+                            <div class="res-bar">
+                                <div class="res-fill" :class="usageTone(row.memoryUsedPercent)" :style="{ width: `${clampPct(row.memoryUsedPercent)}%` }" />
+                            </div>
+                        </div>
                         <template v-else>-</template>
                     </template>
                 </el-table-column>
@@ -125,7 +136,9 @@
                         </template>
                     </template>
                 </el-table-column>
-                <template #empty>{{ $t('pro.node.noData') }}</template>
+                <template #empty>
+                    <el-empty :image-size="60" :description="$t('pro.node.noData')" />
+                </template>
             </el-table>
             <div class="pager">
                 <el-pagination
@@ -337,6 +350,13 @@ const statusType = (s: string) => {
 };
 const statusText = (s: string) => t('pro.node.status' + s);
 const gb = (n: number) => (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+const clampPct = (n?: number) => Math.min(100, Math.max(0, Number(n || 0)));
+const usageTone = (n?: number) => {
+    const p = clampPct(n);
+    if (p >= 85) return 'is-danger';
+    if (p >= 65) return 'is-warning';
+    return 'is-success';
+};
 
 const search = async (silent = false) => {
     if (silent !== true) loading.value = true;
@@ -704,6 +724,10 @@ onBeforeUnmount(() => {
     align-items: center;
     gap: 6px;
 }
+.name-text {
+    font-weight: 500;
+    color: var(--el-text-color-primary);
+}
 .edit {
     cursor: pointer;
     color: var(--el-color-primary);
@@ -711,6 +735,44 @@ onBeforeUnmount(() => {
 .sub {
     color: var(--el-text-color-secondary);
     font-size: 12px;
+}
+.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.res-cell {
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+.res-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    line-height: 1.4;
+}
+.res-bar {
+    height: 4px;
+    width: 100%;
+    border-radius: 2px;
+    background: var(--el-fill-color);
+    overflow: hidden;
+    margin-top: 2px;
+}
+.res-fill {
+    height: 100%;
+    border-radius: 2px;
+}
+.res-fill.is-success {
+    background: var(--el-color-success);
+}
+.res-fill.is-warning {
+    background: var(--el-color-warning);
+}
+.res-fill.is-danger {
+    background: var(--el-color-danger);
+}
+.mt-1 {
+    margin-top: 4px;
 }
 .hint {
     display: block;

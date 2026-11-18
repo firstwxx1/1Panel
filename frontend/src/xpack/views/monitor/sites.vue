@@ -1,34 +1,62 @@
 <template>
     <div>
-        <el-card shadow="never" class="mb-3">
-            <el-date-picker
-                v-model="dates"
-                type="daterange"
-                    style="width: 320px; flex: none"
-                :clearable="false"
-                :start-placeholder="$t('pro.monitor.startDate')"
-                :end-placeholder="$t('pro.monitor.endDate')"
-                @change="load"
-            />
-        </el-card>
         <el-card shadow="never">
-            <div class="tools">
-                <el-button :icon="Refresh" @click="load" />
-                <el-select v-model="refresh" style="width: 110px" @change="setTimer">
-                    <el-option :value="0" :label="$t('pro.monitor.noRefresh')" />
-                    <el-option :value="5" label="5s" />
-                    <el-option :value="30" label="30s" />
-                </el-select>
+            <div class="toolbar">
+                <div class="toolbar-left">
+                    <el-radio-group v-model="preset" @change="onPreset">
+                        <el-radio-button value="today">{{ $t('pro.monitor.today') }}</el-radio-button>
+                        <el-radio-button value="yesterday">{{ $t('pro.monitor.yesterday') }}</el-radio-button>
+                        <el-radio-button value="7d">{{ $t('pro.monitor.d7') }}</el-radio-button>
+                        <el-radio-button value="30d">{{ $t('pro.monitor.d30') }}</el-radio-button>
+                    </el-radio-group>
+                    <el-date-picker
+                        v-model="dates"
+                        type="daterange"
+                        class="date-picker"
+                        :clearable="false"
+                        :start-placeholder="$t('pro.monitor.startDate')"
+                        :end-placeholder="$t('pro.monitor.endDate')"
+                        @change="onDateChange"
+                    />
+                </div>
+                <div class="toolbar-right">
+                    <el-select v-model="refresh" style="width: 115px" @change="setTimer">
+                        <el-option :value="0" :label="$t('pro.monitor.noRefresh')" />
+                        <el-option :value="5" label="5s" />
+                        <el-option :value="30" label="30s" />
+                    </el-select>
+                    <el-button :icon="Refresh" circle :loading="loading" @click="load" />
+                </div>
             </div>
+
             <el-table :data="pageRows" v-loading="loading" @sort-change="onSort">
                 <el-table-column v-if="isMaster" prop="node" :label="$t('pro.monitor.node')" sortable="custom" min-width="120">
                     <template #default="{ row }">{{ row.node || '-' }}</template>
                 </el-table-column>
-                <el-table-column prop="name" :label="$t('pro.monitor.website')" sortable="custom" min-width="160" />
-                <el-table-column v-for="c in cols" :key="c.prop" :prop="c.prop" :label="c.label" sortable="custom" min-width="100">
-                    <template #default="{ row }">{{ c.fmt ? c.fmt(row[c.prop]) : row[c.prop] }}</template>
+                <el-table-column prop="name" :label="$t('pro.monitor.website')" sortable="custom" min-width="170" show-overflow-tooltip>
+                    <template #default="{ row }">
+                        <span class="site-name">{{ row.name }}</span>
+                    </template>
                 </el-table-column>
+                <el-table-column
+                    v-for="c in cols"
+                    :key="c.prop"
+                    :prop="c.prop"
+                    :label="$t('pro.monitor.' + c.labelKey)"
+                    sortable="custom"
+                    min-width="105"
+                >
+                    <template #default="{ row }">
+                        <span :class="cellClass(c.prop, row[c.prop])">
+                            {{ c.fmt ? c.fmt(row[c.prop]) : fmtNum(row[c.prop]) }}
+                        </span>
+                    </template>
+                </el-table-column>
+                <template #empty>
+                    <el-empty :image-size="60" :description="$t('pro.monitor.noData')" />
+                </template>
             </el-table>
+
             <el-pagination
                 class="pager"
                 v-model:current-page="page"
@@ -46,11 +74,10 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
 import { monSitesAgg, MonSiteItem, MonSiteRowNode } from '@/xpack/api/monitor';
 import { isMasterView } from '@/xpack/api/aggregate';
-import { dayParams, fmtBytes, todayRange } from './util';
-import i18n from '@/lang';
+import { DatePreset, dayParams, detectPreset, fmtBytes, fmtNum, presetRange, todayRange } from './util';
 
 defineProps<{ sites: MonSiteItem[] }>();
-const t = i18n.global.t;
+const preset = ref<string>('today');
 const dates = ref<Date[]>(todayRange());
 const loading = ref(false);
 const rows = ref<(MonSiteRowNode & { name: string })[]>([]);
@@ -61,19 +88,25 @@ const refresh = ref(0);
 const sort = ref<{ prop: string; order: string | null }>({ prop: '', order: null });
 let timer: number | undefined;
 
-const cols = [
-    { prop: 'pv', label: t('pro.monitor.pv') },
-    { prop: 'uv', label: t('pro.monitor.uv') },
-    { prop: 'ip', label: t('pro.monitor.ip') },
-    { prop: 'bytes', label: t('pro.monitor.traffic'), fmt: fmtBytes },
-    { prop: 'spiders', label: t('pro.monitor.spiders') },
-    { prop: 'req', label: t('pro.monitor.req') },
-    { prop: 'err4', label: t('pro.monitor.err4') },
-    { prop: 'err5', label: t('pro.monitor.err5') },
-] as { prop: string; label: string; fmt?: (n: number) => string }[];
+const cols: { prop: string; labelKey: string; fmt?: (n: number) => string }[] = [
+    { prop: 'pv', labelKey: 'pv' },
+    { prop: 'uv', labelKey: 'uv' },
+    { prop: 'ip', labelKey: 'ip' },
+    { prop: 'bytes', labelKey: 'traffic', fmt: fmtBytes },
+    { prop: 'spiders', labelKey: 'spiders' },
+    { prop: 'req', labelKey: 'req' },
+    { prop: 'err4', labelKey: 'err4' },
+    { prop: 'err5', labelKey: 'err5' },
+];
+
+const cellClass = (prop: string, val: number) => {
+    if (prop === 'err5' && val > 0) return 'num-cell is-danger';
+    if (prop === 'err4' && val > 0) return 'num-cell is-warning';
+    return 'num-cell';
+};
 
 const pageRows = computed(() => {
-    let list = [...rows.value];
+    const list = [...rows.value];
     const { prop, order } = sort.value;
     if (prop && order) {
         const dir = order === 'ascending' ? 1 : -1;
@@ -82,6 +115,17 @@ const pageRows = computed(() => {
     return list.slice((page.value - 1) * size.value, page.value * size.value);
 });
 const onSort = (s: { prop: string; order: string | null }) => (sort.value = s);
+
+const onPreset = (val: string | number | boolean | undefined) => {
+    if (!val) return;
+    dates.value = presetRange(val as DatePreset);
+    load();
+};
+const onDateChange = () => {
+    preset.value = detectPreset(dates.value);
+    load();
+};
+
 const load = async () => {
     loading.value = true;
     try {
@@ -100,14 +144,47 @@ onBeforeUnmount(() => timer && window.clearInterval(timer));
 </script>
 
 <style scoped>
-.tools {
+.toolbar {
     display: flex;
-    justify-content: flex-end;
-    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
     margin-bottom: 12px;
 }
+.toolbar-left,
+.toolbar-right {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+.date-picker {
+    width: 280px;
+    flex: none;
+}
+.site-name {
+    font-weight: 500;
+    color: var(--el-text-color-primary);
+}
+.num-cell {
+    font-variant-numeric: tabular-nums;
+}
+.num-cell.is-warning {
+    color: var(--el-color-warning);
+    font-weight: 600;
+}
+.num-cell.is-danger {
+    color: var(--el-color-danger);
+    font-weight: 600;
+}
 .pager {
-    margin-top: 12px;
+    margin-top: 14px;
     justify-content: flex-end;
+}
+@media (max-width: 720px) {
+    .date-picker {
+        width: 100%;
+    }
 }
 </style>

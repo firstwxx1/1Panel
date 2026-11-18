@@ -199,10 +199,16 @@ const save = async (applyToAllSites: boolean) => {
 .hint-bar {
     display: flex;
     align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
     gap: 8px;
+    padding: 8px 12px;
     font-size: 12px;
     color: var(--el-text-color-secondary);
+    background: var(--el-fill-color-light);
+    border-radius: 6px;
 }
+
 .preset-row {
     display: flex;
     flex-wrap: wrap;

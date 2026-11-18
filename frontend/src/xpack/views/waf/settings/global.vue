@@ -15,13 +15,15 @@
             </template>
         </NodeTargetBar>
 
-        <el-card class="mb-3">
+        <el-card shadow="never" class="mb-3">
             <div class="master">
                 <div>
-                    <span class="title">{{ $t('pro.waf.masterTitle') }}</span>
-                    <el-tag :type="enabled ? 'success' : 'info'" size="small" class="ml-2">
-                        {{ enabled ? $t('pro.waf.enabled') : $t('pro.waf.disabled') }}
-                    </el-tag>
+                    <div class="title-row">
+                        <span class="title">{{ $t('pro.waf.masterTitle') }}</span>
+                        <el-tag :type="enabled ? 'success' : 'info'" size="small">
+                            {{ enabled ? $t('pro.waf.enabled') : $t('pro.waf.disabled') }}
+                        </el-tag>
+                    </div>
                     <div class="note">{{ $t('pro.waf.masterNote') }}</div>
                 </div>
                 <div class="master-right">
@@ -36,24 +38,28 @@
                 </div>
             </div>
         </el-card>
+
         <el-alert :title="$t('pro.waf.globalNotice')" type="info" :closable="false" class="mb-3" />
-        <el-tabs v-model="tab">
-            <el-tab-pane :label="$t('pro.waf.tabRate')" name="rate">
-                <RateLimit :config="config" :node="targetNode" @reload="load" />
-            </el-tab-pane>
-            <el-tab-pane :label="$t('pro.waf.tabDefault')" name="rules">
-                <DefaultRules :config="config" :node="targetNode" @reload="load" />
-            </el-tab-pane>
-            <el-tab-pane :label="$t('pro.waf.tabGeo')" name="geo">
-                <GeoRestrict :config="config" :node="targetNode" @reload="load" />
-            </el-tab-pane>
-            <el-tab-pane :label="$t('pro.waf.tabCustom')" name="custom">
-                <CustomRules :node="targetNode" />
-            </el-tab-pane>
-            <el-tab-pane :label="$t('pro.waf.tabConfig')" name="config">
-                <ConfigTab :config="config" :node="targetNode" @reload="load" />
-            </el-tab-pane>
-        </el-tabs>
+
+        <el-card shadow="never" class="global-tabs-card">
+            <el-tabs v-model="tab">
+                <el-tab-pane :label="$t('pro.waf.tabRate')" name="rate">
+                    <RateLimit :config="config" :node="targetNode" @reload="load" />
+                </el-tab-pane>
+                <el-tab-pane :label="$t('pro.waf.tabDefault')" name="rules">
+                    <DefaultRules :config="config" :node="targetNode" @reload="load" />
+                </el-tab-pane>
+                <el-tab-pane :label="$t('pro.waf.tabGeo')" name="geo">
+                    <GeoRestrict :config="config" :node="targetNode" @reload="load" />
+                </el-tab-pane>
+                <el-tab-pane :label="$t('pro.waf.tabCustom')" name="custom">
+                    <CustomRules :node="targetNode" />
+                </el-tab-pane>
+                <el-tab-pane :label="$t('pro.waf.tabConfig')" name="config">
+                    <ConfigTab :config="config" :node="targetNode" @reload="load" />
+                </el-tab-pane>
+            </el-tabs>
+        </el-card>
     </div>
 </template>
 
@@ -172,23 +178,40 @@ onMounted(load);
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
 }
+
+.title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .master-right {
     display: flex;
     align-items: center;
     gap: 10px;
 }
+
 .state {
     font-size: 13px;
     color: var(--el-text-color-regular);
 }
+
 .title {
     font-size: 16px;
     font-weight: 600;
+    color: var(--el-text-color-primary);
 }
+
 .note {
     margin-top: 6px;
     font-size: 12px;
     color: var(--el-text-color-secondary);
+}
+
+.global-tabs-card :deep(.el-card__body) {
+    padding-top: 12px;
 }
 </style>

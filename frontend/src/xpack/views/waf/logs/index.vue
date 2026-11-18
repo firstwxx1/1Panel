@@ -1,30 +1,77 @@
 <template>
     <div>
-        <el-card>
+        <el-card shadow="never">
             <div class="filters">
-                <el-select v-model="query.website" clearable :placeholder="$t('pro.waf.website')" style="width: 150px" @change="filter">
+                <el-select
+                    v-model="query.website"
+                    clearable
+                    :placeholder="$t('pro.waf.website')"
+                    style="width: 150px"
+                    @change="filter"
+                >
                     <el-option v-for="w in options.websites" :key="w" :value="w" :label="w" />
                 </el-select>
-                <el-select v-model="query.ruleType" clearable :placeholder="$t('pro.waf.hitRule')" style="width: 170px" @change="filter">
+                <el-select
+                    v-model="query.ruleType"
+                    clearable
+                    :placeholder="$t('pro.waf.hitRule')"
+                    style="width: 170px"
+                    @change="filter"
+                >
                     <el-option v-for="r in options.ruleTypes" :key="r" :value="r" :label="ruleLabel(r)" />
                 </el-select>
-                <el-select v-model="query.action" clearable :placeholder="$t('pro.waf.action')" style="width: 120px" @change="filter">
+                <el-select
+                    v-model="query.action"
+                    clearable
+                    :placeholder="$t('pro.waf.action')"
+                    style="width: 120px"
+                    @change="filter"
+                >
                     <el-option :value="''" :label="$t('pro.waf.all')" />
                     <el-option v-for="a in options.actions" :key="a" :value="a" :label="ruleLabel(a)" />
                 </el-select>
-                <el-input v-model="query.host" clearable :placeholder="$t('pro.waf.hostPlaceholder')" style="width: 170px" />
-                <el-input v-model="query.url" clearable :placeholder="$t('pro.waf.urlPlaceholder')" style="width: 190px" />
-                <el-input v-model="query.ip" clearable :placeholder="$t('pro.waf.ipPlaceholder')" style="width: 150px" />
-                <el-input v-model="query.location" clearable :placeholder="$t('pro.waf.locationPlaceholder')" style="width: 160px" />
+                <el-input
+                    v-model="query.host"
+                    clearable
+                    :placeholder="$t('pro.waf.hostPlaceholder')"
+                    style="width: 165px"
+                    @keyup.enter="filter"
+                />
+                <el-input
+                    v-model="query.url"
+                    clearable
+                    :placeholder="$t('pro.waf.urlPlaceholder')"
+                    style="width: 185px"
+                    @keyup.enter="filter"
+                />
+                <el-input
+                    v-model="query.ip"
+                    clearable
+                    :placeholder="$t('pro.waf.ipPlaceholder')"
+                    style="width: 145px"
+                    @keyup.enter="filter"
+                />
+                <el-input
+                    v-model="query.location"
+                    clearable
+                    :placeholder="$t('pro.waf.locationPlaceholder')"
+                    style="width: 155px"
+                    @keyup.enter="filter"
+                />
                 <el-button type="primary" @click="filter">{{ $t('commons.button.search') }}</el-button>
+                <el-button @click="resetFilters">{{ $t('commons.button.reset') }}</el-button>
             </div>
 
             <div class="actions">
                 <div class="left">
-                    <el-button type="primary" @click="clearAll">{{ $t('pro.waf.clearLogs') }}</el-button>
-                    <el-button :disabled="!selected.length" @click="blockSelected">{{ $t('pro.waf.batchBlockIp') }}</el-button>
+                    <el-button type="danger" plain @click="clearAll">{{ $t('pro.waf.clearLogs') }}</el-button>
+                    <el-button :disabled="!selected.length" @click="blockSelected">
+                        {{ $t('pro.waf.batchBlockIp') }}
+                    </el-button>
                     <el-button @click="rangeDialog = true">{{ $t('pro.waf.batchBlockRange') }}</el-button>
-                    <el-button :disabled="!selected.length" @click="whiteUrl">{{ $t('pro.waf.batchWhiteUrl') }}</el-button>
+                    <el-button :disabled="!selected.length" @click="whiteUrl">
+                        {{ $t('pro.waf.batchWhiteUrl') }}
+                    </el-button>
                     <el-button type="primary" plain @click="exportCsv">{{ $t('pro.waf.exportLogs') }}</el-button>
                 </div>
                 <div class="right">
@@ -38,33 +85,67 @@
                 </div>
             </div>
 
-            <el-table :data="items" v-loading="loading" size="small" @selection-change="(v: WafLogNode[]) => (selected = v)">
+            <el-table
+                :data="items"
+                v-loading="loading"
+                size="small"
+                @selection-change="(v: WafLogNode[]) => (selected = v)"
+            >
                 <el-table-column type="selection" width="45" />
-                <el-table-column v-if="isMaster" prop="node" :label="$t('pro.monitor.node')" min-width="110" show-overflow-tooltip>
+                <el-table-column
+                    v-if="isMaster"
+                    prop="node"
+                    :label="$t('pro.monitor.node')"
+                    min-width="110"
+                    show-overflow-tooltip
+                >
                     <template #default="{ row }">{{ row.node || '-' }}</template>
                 </el-table-column>
-                <el-table-column prop="ip" label="IP" min-width="130" />
-                <el-table-column prop="host" :label="$t('pro.waf.domain')" min-width="160" show-overflow-tooltip />
-                <el-table-column prop="uri" label="URL" min-width="220" show-overflow-tooltip />
-                <el-table-column :label="$t('pro.waf.region')" min-width="120">
-                    <template #default="{ row }">{{ [row.country, row.province].filter(Boolean).join(' ') }}</template>
+                <el-table-column label="IP" min-width="135">
+                    <template #default="{ row }">
+                        <span class="mono">{{ row.ip }}</span>
+                    </template>
+                </el-table-column>
+                <el-table-column prop="host" :label="$t('pro.waf.domain')" min-width="150" show-overflow-tooltip />
+                <el-table-column :label="$t('pro.waf.method')" width="84">
+                    <template #default="{ row }">
+                        <el-tag v-if="row.method" size="small" effect="plain" :type="methodType(row.method)" class="mono">
+                            {{ row.method }}
+                        </el-tag>
+                        <span v-else>-</span>
+                    </template>
+                </el-table-column>
+                <el-table-column label="URL" min-width="220" show-overflow-tooltip>
+                    <template #default="{ row }">
+                        <span class="mono">{{ row.uri }}</span>
+                    </template>
+                </el-table-column>
+                <el-table-column :label="$t('pro.waf.region')" min-width="120" show-overflow-tooltip>
+                    <template #default="{ row }">
+                        {{ [row.country, row.province].filter(Boolean).join(' ') || '-' }}
+                    </template>
                 </el-table-column>
                 <el-table-column :label="$t('pro.waf.action')" width="110">
                     <template #default="{ row }">
                         <el-tag size="small" :type="actionType(row.action)">{{ ruleLabel(row.action) }}</el-tag>
                     </template>
                 </el-table-column>
-                <el-table-column :label="$t('pro.waf.hitRule')" min-width="140">
+                <el-table-column :label="$t('pro.waf.hitRule')" min-width="135" show-overflow-tooltip>
                     <template #default="{ row }">{{ ruleLabel(row.ruleType) }}</template>
                 </el-table-column>
                 <el-table-column :label="$t('pro.waf.time')" width="160" prop="time" />
                 <el-table-column :label="$t('commons.table.operate')" width="150" fixed="right">
                     <template #default="{ row }">
-                        <el-button link type="primary" @click="openDetail(row)">{{ $t('commons.button.view') }}</el-button>
-                        <el-button link type="danger" @click="blockOne(row.ip, row.node)">{{ $t('pro.waf.blockIp') }}</el-button>
+                        <el-button link type="primary" @click="openDetail(row)">
+                            {{ $t('commons.button.view') }}
+                        </el-button>
+                        <el-button link type="danger" @click="blockOne(row.ip, row.node)">
+                            {{ $t('pro.waf.blockIp') }}
+                        </el-button>
                     </template>
                 </el-table-column>
             </el-table>
+
             <div class="pager">
                 <el-pagination
                     v-model:current-page="query.page"
@@ -78,22 +159,44 @@
             </div>
         </el-card>
 
-        <el-dialog v-model="show" :title="$t('pro.waf.logDetail')" width="720px">
-            <el-descriptions :column="2" border size="small" v-if="detail">
-                <el-descriptions-item label="IP">{{ detail.ip }}</el-descriptions-item>
-                <el-descriptions-item :label="$t('pro.waf.region')">
-                    {{ [detail.country, detail.province].filter(Boolean).join(' ') }}
-                </el-descriptions-item>
-                <el-descriptions-item :label="$t('pro.waf.domain')">{{ detail.host }}</el-descriptions-item>
-                <el-descriptions-item :label="$t('pro.waf.method')">{{ detail.method }}</el-descriptions-item>
-                <el-descriptions-item label="URL" :span="2">{{ detail.uri }}</el-descriptions-item>
-                <el-descriptions-item :label="$t('pro.waf.hitRule')" :span="2">
-                    {{ ruleLabel(detail.ruleType) }} / {{ detail.rule }}
-                </el-descriptions-item>
-                <el-descriptions-item :label="$t('pro.waf.matchValue')" :span="2">{{ detail.match }}</el-descriptions-item>
-                <el-descriptions-item label="UA" :span="2">{{ detail.userAgent }}</el-descriptions-item>
-            </el-descriptions>
-            <pre class="req">{{ detail?.request }}</pre>
+        <el-dialog v-model="show" :title="$t('pro.waf.logDetail')" width="740px">
+            <template v-if="detail">
+                <el-descriptions :column="2" border size="small">
+                    <el-descriptions-item label="IP">
+                        <span class="mono">{{ detail.ip }}</span>
+                    </el-descriptions-item>
+                    <el-descriptions-item :label="$t('pro.waf.region')">
+                        {{ [detail.country, detail.province].filter(Boolean).join(' ') || '-' }}
+                    </el-descriptions-item>
+                    <el-descriptions-item :label="$t('pro.waf.domain')">{{ detail.host || '-' }}</el-descriptions-item>
+                    <el-descriptions-item :label="$t('pro.waf.time')">{{ detail.time || '-' }}</el-descriptions-item>
+                    <el-descriptions-item :label="$t('pro.waf.method')">
+                        <el-tag v-if="detail.method" size="small" effect="plain" :type="methodType(detail.method)" class="mono">
+                            {{ detail.method }}
+                        </el-tag>
+                        <span v-else>-</span>
+                    </el-descriptions-item>
+                    <el-descriptions-item :label="$t('pro.waf.action')">
+                        <el-tag size="small" :type="actionType(detail.action)">{{ ruleLabel(detail.action) }}</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="URL" :span="2">
+                        <span class="mono break-all">{{ detail.uri || '-' }}</span>
+                    </el-descriptions-item>
+                    <el-descriptions-item :label="$t('pro.waf.hitRule')" :span="2">
+                        {{ ruleLabel(detail.ruleType) }}<template v-if="detail.rule"> / {{ detail.rule }}</template>
+                    </el-descriptions-item>
+                    <el-descriptions-item :label="$t('pro.waf.matchValue')" :span="2">
+                        <span class="mono break-all">{{ detail.match || '-' }}</span>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="UA" :span="2">
+                        <span class="break-all">{{ detail.userAgent || '-' }}</span>
+                    </el-descriptions-item>
+                </el-descriptions>
+
+                <div class="req-label">{{ $t('pro.waf.rawRequest') }}</div>
+                <pre v-if="detail.request && detail.request.trim()" class="req">{{ detail.request }}</pre>
+                <div v-else class="req-empty">{{ $t('pro.waf.noRawRequest') }}</div>
+            </template>
         </el-dialog>
 
         <el-dialog v-model="rangeDialog" :title="$t('pro.waf.batchBlockRange')" width="480px">
@@ -128,7 +231,17 @@ import {
 import { isMasterView, nodeExec } from '@/xpack/api/aggregate';
 
 const { t, te } = useI18n();
-const query = reactive<WafLogQuery>({ website: '', ruleType: '', action: '', host: '', url: '', ip: '', location: '', page: 1, size: 20 });
+const query = reactive<WafLogQuery>({
+    website: '',
+    ruleType: '',
+    action: '',
+    host: '',
+    url: '',
+    ip: '',
+    location: '',
+    page: 1,
+    size: 20,
+});
 const options = ref<WafLogOptions>({ websites: [], ruleTypes: [], actions: [] });
 const items = ref<WafLogNode[]>([]);
 const isMaster = computed(() => isMasterView());
@@ -162,8 +275,29 @@ const actionType = (action: string) => {
     return 'info';
 };
 
+const methodType = (method: string) => {
+    const m = (method || '').toUpperCase();
+    if (m === 'GET') return 'success';
+    if (m === 'POST') return 'warning';
+    if (m === 'DELETE') return 'danger';
+    if (m === 'PUT' || m === 'PATCH') return 'primary';
+    return 'info';
+};
+
 // changing a filter starts from page 1; the pager keeps asking for another page
 const filter = () => {
+    query.page = 1;
+    search();
+};
+
+const resetFilters = () => {
+    query.website = '';
+    query.ruleType = '';
+    query.action = '';
+    query.host = '';
+    query.url = '';
+    query.ip = '';
+    query.location = '';
     query.page = 1;
     search();
 };
@@ -189,7 +323,8 @@ const saveRule = (node: string, name: string, site: string, rule: object, oldId:
         : saveWafRule(name as any, site, rule as any, oldId);
 
 const addBlack = async (rule: string, node = '') => {
-    await saveRule(node, 'ipBlack', '', { state: 'on', name: rule, rule, type: 'ipv4' }, '');
+    const type = rule.includes('/') || rule.includes('-') ? 'ipArr' : rule.includes(':') ? 'ipv6' : 'ipv4';
+    await saveRule(node, 'ipBlack', '', { state: 'on', name: rule, rule, type }, '');
     ElMessage.success(t('pro.waf.blockSuccess'));
 };
 
@@ -197,7 +332,8 @@ const blockOne = (ip: string, node = '') => addBlack(ip, node);
 
 const blockSelected = async () => {
     for (const row of selected.value) {
-        await saveRule(row.node || '', 'ipBlack', '', { state: 'on', name: row.ip, rule: row.ip, type: 'ipv4' }, '');
+        const type = row.ip.includes(':') ? 'ipv6' : 'ipv4';
+        await saveRule(row.node || '', 'ipBlack', '', { state: 'on', name: row.ip, rule: row.ip, type }, '');
     }
     ElMessage.success(t('pro.waf.blockSuccess'));
 };
@@ -238,13 +374,28 @@ const exportCsv = async () => {
     if (isMaster.value) {
         const res = await searchWafLogsAgg({ ...query, page: 1, size: 5000 });
         const csv = (v: any) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
-        const head = ['time', 'node', 'ip', 'host', 'uri', 'method', 'ruleType', 'rule', 'action', 'country', 'province', 'userAgent'];
+        const head = [
+            'time',
+            'node',
+            'ip',
+            'host',
+            'uri',
+            'method',
+            'ruleType',
+            'rule',
+            'action',
+            'country',
+            'province',
+            'userAgent',
+        ];
         const lines = res.items.map((r) =>
             [r.time, r.node, r.ip, r.host, r.uri, r.method, r.ruleType, r.rule, r.action, r.country, r.province, r.userAgent]
                 .map(csv)
                 .join(','),
         );
-        const blob = new Blob(['﻿' + head.join(',') + '\n' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+        const blob = new Blob(['\ufeff' + head.join(',') + '\n' + lines.join('\n')], {
+            type: 'text/csv;charset=utf-8',
+        });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = 'waf-log.csv';
@@ -280,33 +431,82 @@ onBeforeUnmount(() => {
 .filters {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 8px;
     margin-bottom: 12px;
 }
+
 .actions {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
     margin-bottom: 12px;
 }
+
+.left {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.left :deep(.el-button + .el-button) {
+    margin-left: 0;
+}
+
 .right {
     display: flex;
     align-items: center;
     gap: 8px;
 }
+
 .pager {
     display: flex;
     justify-content: flex-end;
     margin-top: 12px;
 }
+
+.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.break-all {
+    word-break: break-all;
+}
+
+.req-label {
+    margin-top: 14px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--el-text-color-secondary);
+}
+
 .req {
-    margin-top: 12px;
-    max-height: 260px;
+    margin: 0;
+    max-height: 320px;
     overflow: auto;
     white-space: pre-wrap;
     word-break: break-all;
-    background: var(--el-fill-color-light);
-    padding: 8px;
+    padding: 12px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--el-border-color-lighter);
+    background: #181a1f;
+    color: #e5eaf3;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     font-size: 12px;
+    line-height: 1.55;
+}
+
+.req-empty {
+    padding: 18px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+    background: var(--el-fill-color-lighter);
+    border: 1px dashed var(--el-border-color-lighter);
+    border-radius: 6px;
 }
 </style>

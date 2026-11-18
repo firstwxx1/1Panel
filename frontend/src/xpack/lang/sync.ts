@@ -56,6 +56,12 @@ const messages = {
         dstDir: '目标目录',
         dstDirPlaceholder: '对侧当前目录',
         confirm: '确认将选中项传输到 {node}:{dir} 吗？',
+        leftPane: '源 / 左侧面板',
+        rightPane: '目标 / 右侧面板',
+        selectedCount: '已选 {n} 项',
+        selectAll: '全选',
+        clearSelect: '清空',
+        noLogs: '暂无日志输出',
     },
     en: {
         title: 'Resource Sync',
@@ -112,6 +118,12 @@ const messages = {
         dstDir: 'Destination Dir',
         dstDirPlaceholder: 'Opposite current directory',
         confirm: 'Transfer the selected item(s) to {node}:{dir}?',
+        leftPane: 'Source / Left Pane',
+        rightPane: 'Target / Right Pane',
+        selectedCount: '{n} selected',
+        selectAll: 'Select All',
+        clearSelect: 'Clear',
+        noLogs: 'No log output',
     },
 };
 

@@ -1,23 +1,31 @@
 <template>
     <div>
         <NodeTargetBar v-model="targetNode" @change="onNodeChange" />
-        <el-card>
+        <el-card shadow="never">
             <div class="toolbar">
                 <el-input v-model="keyword" :placeholder="$t('pro.waf.searchSite')" clearable style="width: 320px">
-                    <template #prefix><el-icon><Search /></el-icon></template>
+                    <template #prefix>
+                        <el-icon><Search /></el-icon>
+                    </template>
                 </el-input>
-                <el-button :icon="Refresh" @click="load" />
+                <el-button :icon="Refresh" circle @click="load" />
             </div>
+
             <el-table :data="paged" v-loading="loading" size="small">
-                <el-table-column :label="$t('pro.waf.website')" min-width="200">
+                <el-table-column :label="$t('pro.waf.website')" min-width="200" show-overflow-tooltip>
                     <template #default="{ row }">{{ (row.domains || []).join(', ') || row.key }}</template>
                 </el-table-column>
-                <el-table-column :label="$t('pro.waf.remark')" min-width="120">
+                <el-table-column :label="$t('pro.waf.remark')" min-width="120" show-overflow-tooltip>
                     <template #default="{ row }">{{ row.remark || '-' }}</template>
                 </el-table-column>
-                <el-table-column :label="$t('pro.waf.switch')" width="80">
+                <el-table-column :label="$t('pro.waf.switch')" width="84">
                     <template #default="{ row }">
-                        <el-switch v-model="row.config.waf.state" active-value="on" inactive-value="off" @change="save(row)" />
+                        <el-switch
+                            v-model="row.config.waf.state"
+                            active-value="on"
+                            inactive-value="off"
+                            @change="save(row)"
+                        />
                     </template>
                 </el-table-column>
                 <el-table-column :label="$t('pro.waf.policy')" width="210">
@@ -36,12 +44,17 @@
                         </el-radio-group>
                     </template>
                 </el-table-column>
-                <el-table-column :label="$t('pro.waf.rateLimit')" width="90">
+                <el-table-column :label="$t('pro.waf.rateLimit')" width="96">
                     <template #default="{ row }">
-                        <el-switch v-model="row.config.cc.state" active-value="on" inactive-value="off" @change="save(row)" />
+                        <el-switch
+                            v-model="row.config.cc.state"
+                            active-value="on"
+                            inactive-value="off"
+                            @change="save(row)"
+                        />
                     </template>
                 </el-table-column>
-                <el-table-column :label="$t('pro.waf.mod_geoRestrict')" width="90">
+                <el-table-column :label="$t('pro.waf.mod_geoRestrict')" width="96">
                     <template #default="{ row }">
                         <el-switch
                             v-model="row.config.geoRestrict.state"
@@ -51,12 +64,13 @@
                         />
                     </template>
                 </el-table-column>
-                <el-table-column :label="$t('commons.table.operate')" width="120">
+                <el-table-column :label="$t('commons.table.operate')" width="120" fixed="right">
                     <template #default="{ row }">
                         <el-button link type="primary" @click="openDetail(row)">{{ $t('pro.waf.detail') }}</el-button>
                     </template>
                 </el-table-column>
             </el-table>
+
             <div class="pager">
                 <el-pagination
                     v-model:current-page="page"
@@ -79,7 +93,7 @@
                 </el-form>
 
                 <el-divider content-position="left">{{ $t('pro.waf.accessRate') }}</el-divider>
-                <el-form label-width="140px" v-if="current.config.cc">
+                <el-form v-if="current.config.cc" label-width="140px">
                     <el-form-item :label="$t('pro.waf.mod_cc')">
                         <el-switch v-model="current.config.cc.state" active-value="on" inactive-value="off" />
                     </el-form-item>
@@ -150,7 +164,7 @@
                 <el-form label-width="150px">
                     <el-form-item v-for="m in modules" :key="m.key" :label="label(m.key)">
                         <el-switch v-model="m.item.state" active-value="on" inactive-value="off" />
-                        <span class="ml-3" v-if="m.item.step !== undefined">
+                        <span v-if="m.item.step !== undefined" class="ml-3">
                             <el-input-number
                                 v-model="m.item.threshold"
                                 :min="1"
@@ -176,7 +190,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Refresh, Search } from '@element-plus/icons-vue';
 import { useI18n } from 'vue-i18n';
@@ -198,6 +212,10 @@ const size = ref(20);
 const drawer = ref(false);
 const current = ref<WafSite | null>(null);
 const ccActions = ['deny', 'five_seconds', 'captcha', 'observe'];
+
+watch(keyword, () => {
+    page.value = 1;
+});
 
 const normalizeSite = (s: WafSite): WafSite => {
     const cfg = s.config || {};
@@ -303,15 +321,18 @@ onMounted(load);
 .toolbar {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: space-between;
+    flex-wrap: wrap;
     gap: 8px;
     margin-bottom: 12px;
 }
+
 .pager {
     display: flex;
     justify-content: flex-end;
     margin-top: 12px;
 }
+
 .drawer-body {
     padding-right: 8px;
 }

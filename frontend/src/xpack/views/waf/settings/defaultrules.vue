@@ -145,7 +145,9 @@ const apply = async () => {
 <style scoped>
 .unknown-card {
     border: 1px solid var(--el-border-color-lighter);
+    background: var(--el-fill-color-lighter);
 }
+
 .unknown-row {
     display: flex;
     align-items: center;
@@ -153,23 +155,34 @@ const apply = async () => {
     flex-wrap: wrap;
     gap: 12px;
 }
+
 .unknown-title {
     font-weight: 600;
     font-size: 14px;
     display: flex;
     align-items: center;
+    color: var(--el-text-color-primary);
 }
+
 .unknown-controls {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 14px;
 }
+
 .bar {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
     margin-bottom: 12px;
+    background: var(--el-fill-color-light);
+    border-radius: 6px;
 }
+
 .hint {
     font-size: 12px;
     color: var(--el-text-color-secondary);

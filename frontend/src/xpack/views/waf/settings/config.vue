@@ -1,6 +1,12 @@
 <template>
     <div class="waf-config">
-        <el-card shadow="never" class="mb-3">
+        <el-card shadow="never" class="section-card mb-3">
+            <template #header>
+                <div class="cdn-head">
+                    <span>{{ $t('pro.waf.logConfigTitle') }}</span>
+                    <el-tag size="small" type="success" effect="light">{{ $t('pro.waf.globalTag') }}</el-tag>
+                </div>
+            </template>
             <el-form label-width="180px" style="max-width: 680px">
                 <el-form-item :label="$t('pro.waf.logEnable')">
                     <el-switch v-model="form.log.state" active-value="on" inactive-value="off" />
@@ -23,7 +29,7 @@
             </el-form>
         </el-card>
 
-        <el-card shadow="never">
+        <el-card shadow="never" class="section-card">
             <template #header>
                 <div class="cdn-head">
                     <span>{{ $t('pro.waf.cdnTitle') }}</span>
@@ -70,7 +76,7 @@
                             v-for="row in cdnHeaders"
                             :key="row.id || row.rule"
                             closable
-                            class="mr-2 mb-1"
+                            class="mr-2 mb-1 mono"
                             @close="removeHeader(row)"
                         >
                             {{ row.rule }}
@@ -224,18 +230,27 @@ onMounted(loadCdnHeaders);
 </script>
 
 <style scoped>
+.section-card {
+    border: 1px solid var(--el-border-color-lighter);
+}
+
 .cdn-head {
     display: flex;
     align-items: center;
     gap: 8px;
+    font-size: 14px;
     font-weight: 600;
+    color: var(--el-text-color-primary);
 }
+
 .cdn-input-row {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
     width: 100%;
 }
+
 .preset-row {
     display: flex;
     align-items: center;
@@ -244,12 +259,15 @@ onMounted(loadCdnHeaders);
     margin-top: 8px;
     width: 100%;
 }
+
 .preset-tag {
     cursor: pointer;
 }
+
 .header-tags {
     width: 100%;
 }
+
 .hint {
     width: 100%;
     margin-top: 4px;
@@ -257,8 +275,13 @@ onMounted(loadCdnHeaders);
     color: var(--el-text-color-secondary);
     line-height: 1.5;
 }
+
 .hint-inline {
     font-size: 12px;
     color: var(--el-text-color-secondary);
+}
+
+.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 </style>

@@ -1,5 +1,10 @@
 <template>
-    <el-select :model-value="modelValue || (all ? ALL : '')" style="width: 300px" @update:model-value="onChange">
+    <el-select
+        :model-value="modelValue || (all ? ALL : '')"
+        filterable
+        class="site-select"
+        @update:model-value="onChange"
+    >
         <template #prefix>{{ $t('pro.monitor.website') }}</template>
         <el-option v-if="all" :value="ALL" :label="$t('pro.monitor.allSites')" />
         <el-option v-for="s in sites" :key="s.alias" :value="s.alias" :label="labelOf(s)" />
@@ -24,3 +29,10 @@ const labelOf = (s: MonSiteItem) => {
     return node ? `${name} (${node})` : name;
 };
 </script>
+
+<style scoped>
+.site-select {
+    width: 260px;
+    max-width: 100%;
+}
+</style>

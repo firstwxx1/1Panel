@@ -1,26 +1,28 @@
 <template>
-    <el-row :gutter="12">
-        <el-col :span="6">
+    <el-row :gutter="20" class="ratelimit-wrap">
+        <el-col :xs="24" :sm="6" class="menu-col">
             <el-menu :default-active="active" class="menu">
                 <el-menu-item v-for="m in menus" :key="m.key" :index="m.key" @click="active = m.key">
                     {{ $t('pro.waf.' + m.label) }}
                 </el-menu-item>
             </el-menu>
         </el-col>
-        <el-col :span="18">
+        <el-col :xs="24" :sm="18">
             <div v-if="item" class="panel">
-                <el-switch v-model="item.state" active-value="on" inactive-value="off" size="large" />
-                <div class="summary">
-                    {{ summary }}
-                    <el-tag
-                        size="small"
-                        :type="isSiteRule ? 'primary' : 'success'"
-                        effect="light"
-                        class="ml-2"
-                    >
-                        {{ isSiteRule ? $t('pro.waf.siteTag') : $t('pro.waf.globalTag') }}
-                    </el-tag>
+                <div class="panel-header">
+                    <div class="panel-title-wrap">
+                        <span class="panel-title">{{ activeMenuLabel }}</span>
+                        <el-tag size="small" :type="isSiteRule ? 'primary' : 'success'" effect="light">
+                            {{ isSiteRule ? $t('pro.waf.siteTag') : $t('pro.waf.globalTag') }}
+                        </el-tag>
+                    </div>
+                    <el-switch v-model="item.state" active-value="on" inactive-value="off" size="large" />
                 </div>
+
+                <div class="summary-banner">
+                    {{ summary }}
+                </div>
+
                 <el-form label-width="130px" class="mt-4">
                     <el-form-item v-if="active === 'cc'" :label="$t('pro.waf.mode')" required>
                         <el-select v-model="item.mode" style="width: 240px">
@@ -29,11 +31,21 @@
                         </el-select>
                     </el-form-item>
                     <el-form-item :label="$t('pro.waf.period')" required>
-                        <el-input-number v-model="item.duration" :min="1" controls-position="right" style="width: 140px" />
+                        <el-input-number
+                            v-model="item.duration"
+                            :min="1"
+                            controls-position="right"
+                            style="width: 140px"
+                        />
                         <span class="unit">{{ $t('pro.waf.second') }}</span>
                     </el-form-item>
                     <el-form-item :label="$t('pro.waf.frequency')" required>
-                        <el-input-number v-model="item.threshold" :min="1" controls-position="right" style="width: 140px" />
+                        <el-input-number
+                            v-model="item.threshold"
+                            :min="1"
+                            controls-position="right"
+                            style="width: 140px"
+                        />
                         <span class="unit">{{ $t('pro.waf.times') }}</span>
                     </el-form-item>
                     <el-form-item :label="$t('pro.waf.action')" required>
@@ -59,7 +71,12 @@
                         <el-switch v-model="item.ipBlock" active-value="on" inactive-value="off" />
                     </el-form-item>
                     <el-form-item v-if="item.ipBlock !== 'off'" :label="$t('pro.waf.blockTime')" required>
-                        <el-input-number v-model="item.ipBlockTime" :min="1" controls-position="right" style="width: 140px" />
+                        <el-input-number
+                            v-model="item.ipBlockTime"
+                            :min="1"
+                            controls-position="right"
+                            style="width: 140px"
+                        />
                         <span class="unit">{{ $t('pro.waf.second') }}</span>
                     </el-form-item>
                     <el-form-item>
@@ -71,7 +88,8 @@
                         </el-button>
                     </el-form-item>
                 </el-form>
-                <div class="note" v-if="active === 'cc'">
+
+                <div v-if="active === 'cc'" class="note">
                     {{ $t('pro.waf.globalModeNote') }}<br />{{ $t('pro.waf.urlModeNote') }}
                 </div>
                 <div class="warn">{{ $t('pro.waf.blockWarning') }}</div>
@@ -100,6 +118,11 @@ const menus = [
 const actionOptions = ['deny', 'five_seconds', 'captcha', 'observe'];
 const active = ref('cc');
 const saving = ref(false);
+
+const activeMenuLabel = computed(() => {
+    const found = menus.find((m) => m.key === active.value);
+    return found ? t('pro.waf.' + found.label) : '';
+});
 
 const defaultEntry = (key: string): Record<string, any> => ({
     state: 'off',
@@ -175,20 +198,71 @@ const save = async (apply: boolean) => {
 </script>
 
 <style scoped>
+.ratelimit-wrap {
+    padding-top: 4px;
+}
+
+.menu-col {
+    border-right: 1px solid var(--el-border-color-lighter);
+}
+
 .menu {
-    border-right: 1px solid var(--el-border-color-light);
+    border-right: none;
+    background: transparent;
 }
+
+.menu :deep(.el-menu-item) {
+    height: 42px;
+    line-height: 42px;
+    margin-bottom: 4px;
+    border-radius: 6px;
+    font-size: 13px;
+}
+
+.menu :deep(.el-menu-item.is-active) {
+    background: var(--el-color-primary-light-9);
+    color: var(--el-color-primary);
+    font-weight: 600;
+}
+
 .panel {
-    padding: 0 8px;
+    padding: 2px 6px 4px;
 }
-.summary {
-    margin-top: 12px;
+
+.panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.panel-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.panel-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+}
+
+.summary-banner {
+    padding: 10px 14px;
+    font-size: 13px;
     color: var(--el-text-color-regular);
+    background: var(--el-fill-color-light);
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: 6px;
 }
+
 .unit {
     margin-left: 8px;
     color: var(--el-text-color-secondary);
 }
+
 .hint {
     width: 100%;
     margin-top: 4px;
@@ -196,15 +270,32 @@ const save = async (apply: boolean) => {
     color: var(--el-text-color-secondary);
     line-height: 1.4;
 }
+
 .note {
     margin-top: 8px;
     font-size: 12px;
     color: var(--el-text-color-secondary);
     line-height: 20px;
 }
+
 .warn {
     margin-top: 12px;
+    padding: 8px 12px;
     font-size: 12px;
     color: var(--el-color-warning);
+    background: var(--el-color-warning-light-9);
+    border-radius: 6px;
+}
+
+@media (max-width: 767px) {
+    .menu-col {
+        border-right: none;
+        border-bottom: 1px solid var(--el-border-color-lighter);
+        padding-bottom: 8px;
+        margin-bottom: 14px;
+    }
+    .panel {
+        padding: 0;
+    }
 }
 </style>

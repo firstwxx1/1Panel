@@ -1,9 +1,7 @@
 <template>
     <div>
+        <ProTabBar v-model="active" :tabs="tabItems" @change="onTab" />
         <NodeTargetBar v-model="targetNode" @change="onNodeChange" />
-        <el-tabs v-model="active" type="card" class="mb-3" @tab-change="onTab">
-            <el-tab-pane v-for="k in keys" :key="k" :label="$t('pro.tamper.' + k)" :name="k" />
-        </el-tabs>
 
         <div v-if="active === 'sites'">
             <el-alert
@@ -14,92 +12,183 @@
                 class="mb-3"
                 :title="$t('pro.tamper.globalOffWarn')"
             />
+
             <el-card shadow="never" class="mb-3">
-                <div class="desc">{{ $t('pro.tamper.desc') }}</div>
-                <div class="bar">
-                    <el-switch v-model="enabled" :active-text="$t('pro.tamper.globalSwitch')" @change="saveGlobal" />
-                    <span>{{ $t('pro.tamper.interval') }}</span>
-                    <el-input-number v-model="interval" :min="10" :max="3600" size="small" />
-                    <el-button type="primary" size="small" @click="saveGlobal">{{ $t('pro.tamper.saveGlobal') }}</el-button>
+                <div class="master">
+                    <div class="master-info">
+                        <div class="master-title-row">
+                            <span class="master-title">{{ $t('pro.tamper.globalSwitch') }}</span>
+                            <el-tag :type="enabled ? 'success' : 'info'" size="small" effect="light">
+                                {{ enabled ? $t('pro.tamper.enabled') : $t('pro.tamper.disabled') }}
+                            </el-tag>
+                        </div>
+                        <div class="desc">{{ $t('pro.tamper.desc') }}</div>
+                    </div>
+                    <div class="master-controls">
+                        <div class="interval-group">
+                            <span class="interval-label">{{ $t('pro.tamper.interval') }}</span>
+                            <el-input-number
+                                v-model="interval"
+                                :min="10"
+                                :max="3600"
+                                size="small"
+                                controls-position="right"
+                                style="width: 110px"
+                            />
+                            <el-button type="primary" size="small" plain @click="saveGlobal">
+                                {{ $t('pro.tamper.saveGlobal') }}
+                            </el-button>
+                        </div>
+                        <span class="v-divider" />
+                        <el-switch v-model="enabled" size="large" @change="saveGlobal" />
+                    </div>
                 </div>
             </el-card>
-            <el-table :data="sites" v-loading="loading">
-                <el-table-column :label="$t('pro.tamper.site')" min-width="180">
-                    <template #default="{ row }">{{ row.domain || row.alias }}</template>
-                </el-table-column>
-                <el-table-column prop="root" :label="$t('pro.tamper.root')" min-width="260" show-overflow-tooltip />
-                <el-table-column :label="$t('pro.tamper.protect')" width="90">
-                    <template #default="{ row }">
-                        <el-switch v-model="row.enabled" :loading="busy === row.alias" @change="saveSite(row)" />
+
+            <el-card shadow="never">
+                <div class="table-toolbar">
+                    <div class="toolbar-left">
+                        <el-tag size="small" type="info" effect="plain">
+                            {{ $t('pro.tamper.siteCount', { n: sites.length }) }}
+                        </el-tag>
+                    </div>
+                    <div class="toolbar-right">
+                        <el-button :icon="Refresh" circle :loading="loading" @click="load" />
+                    </div>
+                </div>
+
+                <el-table :data="sites" v-loading="loading">
+                    <el-table-column :label="$t('pro.tamper.site')" min-width="180" show-overflow-tooltip>
+                        <template #default="{ row }">
+                            <span class="site-name">{{ row.domain || row.alias }}</span>
+                        </template>
+                    </el-table-column>
+                    <el-table-column prop="root" :label="$t('pro.tamper.root')" min-width="260" show-overflow-tooltip>
+                        <template #default="{ row }">
+                            <span class="mono">{{ row.root }}</span>
+                        </template>
+                    </el-table-column>
+                    <el-table-column :label="$t('pro.tamper.protect')" width="95">
+                        <template #default="{ row }">
+                            <el-switch v-model="row.enabled" :loading="busy === row.alias" @change="saveSite(row)" />
+                        </template>
+                    </el-table-column>
+                    <el-table-column width="120">
+                        <template #header>
+                            <el-tooltip :content="$t('pro.tamper.restoreTip')">
+                                <span class="tip-head">{{ $t('pro.tamper.restore') }}</span>
+                            </el-tooltip>
+                        </template>
+                        <template #default="{ row }">
+                            <el-switch v-model="row.restore" :disabled="!row.enabled" @change="saveSite(row)" />
+                        </template>
+                    </el-table-column>
+                    <el-table-column prop="files" :label="$t('pro.tamper.files')" width="100">
+                        <template #default="{ row }">
+                            <span class="num-cell">{{ (row.files || 0).toLocaleString() }}</span>
+                        </template>
+                    </el-table-column>
+                    <el-table-column :label="$t('pro.tamper.baselineAt')" width="175">
+                        <template #default="{ row }">
+                            <span :class="{ 'text-muted': !row.baselineAt }">
+                                {{ row.baselineAt || $t('pro.tamper.noBaseline') }}
+                            </span>
+                        </template>
+                    </el-table-column>
+                    <el-table-column :label="$t('pro.tamper.pending')" width="95">
+                        <template #default="{ row }">
+                            <el-tag v-if="row.pending" size="small" type="danger" effect="light">{{ row.pending }}</el-tag>
+                            <span v-else class="text-muted">0</span>
+                        </template>
+                    </el-table-column>
+                    <el-table-column :label="$t('pro.tamper.operation')" width="260" fixed="right">
+                        <template #default="{ row }">
+                            <el-button link type="primary" @click="openExcludes(row)">{{ $t('pro.tamper.excludes') }}</el-button>
+                            <el-button link type="primary" :disabled="!row.enabled" @click="rebuild(row)">
+                                {{ $t('pro.tamper.rebuild') }}
+                            </el-button>
+                            <el-button link type="primary" :disabled="!row.enabled" @click="scan(row)">
+                                {{ $t('pro.tamper.scan') }}
+                            </el-button>
+                        </template>
+                    </el-table-column>
+                    <template #empty>
+                        <el-empty :image-size="60" :description="$t('commons.msg.noneData')" />
                     </template>
-                </el-table-column>
-                <el-table-column width="120">
-                    <template #header>
-                        <el-tooltip :content="$t('pro.tamper.restoreTip')">
-                            <span>{{ $t('pro.tamper.restore') }}</span>
-                        </el-tooltip>
-                    </template>
-                    <template #default="{ row }">
-                        <el-switch v-model="row.restore" :disabled="!row.enabled" @change="saveSite(row)" />
-                    </template>
-                </el-table-column>
-                <el-table-column prop="files" :label="$t('pro.tamper.files')" width="90" />
-                <el-table-column :label="$t('pro.tamper.baselineAt')" width="170">
-                    <template #default="{ row }">{{ row.baselineAt || $t('pro.tamper.noBaseline') }}</template>
-                </el-table-column>
-                <el-table-column :label="$t('pro.tamper.pending')" width="90">
-                    <template #default="{ row }">
-                        <el-tag v-if="row.pending" type="danger">{{ row.pending }}</el-tag>
-                        <span v-else>0</span>
-                    </template>
-                </el-table-column>
-                <el-table-column :label="$t('pro.tamper.operation')" width="300" fixed="right">
-                    <template #default="{ row }">
-                        <el-button link type="primary" @click="openExcludes(row)">{{ $t('pro.tamper.excludes') }}</el-button>
-                        <el-button link type="primary" :disabled="!row.enabled" @click="rebuild(row)">
-                            {{ $t('pro.tamper.rebuild') }}
-                        </el-button>
-                        <el-button link type="primary" :disabled="!row.enabled" @click="scan(row)">
-                            {{ $t('pro.tamper.scan') }}
-                        </el-button>
-                    </template>
-                </el-table-column>
-            </el-table>
+                </el-table>
+            </el-card>
         </div>
 
         <div v-if="active === 'events'">
-            <div class="bar mb-3">
-                <el-select v-model="evSite" clearable style="width: 220px" :placeholder="$t('pro.tamper.all')" @change="loadEvents(1)">
-                    <el-option v-for="s in sites" :key="s.alias" :label="s.domain || s.alias" :value="s.alias" />
-                </el-select>
-                <el-button @click="loadEvents(page)">{{ $t('pro.tamper.refresh') }}</el-button>
-                <el-button @click="clearEvents">{{ $t('pro.tamper.clear') }}</el-button>
-            </div>
-            <el-table :data="events" v-loading="loading">
-                <el-table-column :label="$t('pro.tamper.time')" width="180">
-                    <template #default="{ row }">{{ new Date(row.time).toLocaleString() }}</template>
-                </el-table-column>
-                <el-table-column prop="site" :label="$t('pro.tamper.site')" width="160" />
-                <el-table-column :label="$t('pro.tamper.kind')" width="110">
-                    <template #default="{ row }">{{ $t('pro.tamper.k_' + row.kind) }}</template>
-                </el-table-column>
-                <el-table-column prop="path" :label="$t('pro.tamper.path')" min-width="300" show-overflow-tooltip />
-                <el-table-column :label="$t('pro.tamper.action')" width="120">
-                    <template #default="{ row }">
-                        <el-tag :type="row.action === 'none' || row.action === 'restore_failed' ? 'danger' : 'success'">
-                            {{ $t('pro.tamper.a_' + row.action) }}
-                        </el-tag>
+            <el-card shadow="never">
+                <div class="table-toolbar">
+                    <div class="toolbar-left">
+                        <el-select
+                            v-model="evSite"
+                            clearable
+                            style="width: 240px"
+                            :placeholder="$t('pro.tamper.all')"
+                            @change="loadEvents(1)"
+                        >
+                            <el-option v-for="s in sites" :key="s.alias" :label="s.domain || s.alias" :value="s.alias" />
+                        </el-select>
+                        <el-button
+                            type="danger"
+                            plain
+                            :icon="Delete"
+                            :disabled="!events.length && !total"
+                            @click="clearEvents"
+                        >
+                            {{ $t('pro.tamper.clear') }}
+                        </el-button>
+                    </div>
+                    <div class="toolbar-right">
+                        <el-button :icon="Refresh" circle :loading="loading" @click="loadEvents(page)" />
+                    </div>
+                </div>
+
+                <el-table :data="events" v-loading="loading">
+                    <el-table-column :label="$t('pro.tamper.time')" width="180">
+                        <template #default="{ row }">{{ new Date(row.time).toLocaleString() }}</template>
+                    </el-table-column>
+                    <el-table-column prop="site" :label="$t('pro.tamper.site')" width="160" show-overflow-tooltip />
+                    <el-table-column :label="$t('pro.tamper.kind')" width="115">
+                        <template #default="{ row }">
+                            <el-tag size="small" :type="kindTagType(row.kind)" effect="light">
+                                {{ $t('pro.tamper.k_' + row.kind) }}
+                            </el-tag>
+                        </template>
+                    </el-table-column>
+                    <el-table-column prop="path" :label="$t('pro.tamper.path')" min-width="300" show-overflow-tooltip>
+                        <template #default="{ row }">
+                            <span class="mono">{{ row.path }}</span>
+                        </template>
+                    </el-table-column>
+                    <el-table-column :label="$t('pro.tamper.action')" width="130">
+                        <template #default="{ row }">
+                            <el-tag
+                                size="small"
+                                :type="row.action === 'none' || row.action === 'restore_failed' ? 'danger' : 'success'"
+                                effect="light"
+                            >
+                                {{ $t('pro.tamper.a_' + row.action) }}
+                            </el-tag>
+                        </template>
+                    </el-table-column>
+                    <template #empty>
+                        <el-empty :image-size="60" :description="$t('commons.msg.noneData')" />
                     </template>
-                </el-table-column>
-            </el-table>
-            <el-pagination
-                class="pager"
-                v-model:current-page="page"
-                :page-size="20"
-                :total="total"
-                layout="total, prev, pager, next"
-                @current-change="loadEvents"
-            />
+                </el-table>
+
+                <el-pagination
+                    class="pager"
+                    v-model:current-page="page"
+                    :page-size="20"
+                    :total="total"
+                    layout="total, prev, pager, next"
+                    @current-change="loadEvents"
+                />
+            </el-card>
         </div>
 
         <el-dialog v-model="exVisible" :title="$t('pro.tamper.excludes')" width="480px">
@@ -115,8 +204,11 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import { Delete, Refresh } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { useI18n } from 'vue-i18n';
 import { GlobalStore } from '@/store';
+import ProTabBar from '@/xpack/components/ProTabBar.vue';
 import NodeTargetBar from '@/xpack/components/NodeTargetBar.vue';
 import {
     TamperEvent,
@@ -129,12 +221,10 @@ import {
     tamperSaveSite,
     tamperScan,
 } from '@/xpack/api/tamper';
-import i18n from '@/lang';
 
-const t = i18n.global.t;
+const { t } = useI18n();
 const globalStore = GlobalStore();
 const targetNode = ref(globalStore.currentNode || 'local');
-const keys = ['sites', 'events'];
 const active = ref('sites');
 const loading = ref(false);
 const busy = ref('');
@@ -149,7 +239,23 @@ const exVisible = ref(false);
 const exText = ref('');
 let exRow: TamperSite | null = null;
 
+const totalPending = computed(() => sites.value.reduce((sum, s) => sum + (s.pending || 0), 0));
+const tabItems = computed(() => [
+    { key: 'sites', label: t('pro.tamper.sites') },
+    {
+        key: 'events',
+        label: t('pro.tamper.events'),
+        count: totalPending.value > 0 ? totalPending.value : undefined,
+    },
+]);
+
 const hasProtectedSite = computed(() => sites.value.some((s) => s.enabled));
+
+const kindTagType = (k: TamperEvent['kind']): 'warning' | 'danger' | 'info' => {
+    if (k === 'modified') return 'warning';
+    if (k === 'added') return 'danger';
+    return 'info';
+};
 
 const load = async () => {
     loading.value = true;
@@ -186,7 +292,7 @@ const onNodeChange = () => {
         loadEvents(1);
     }
 };
-const onTab = (k: any) => (k === 'events' ? loadEvents(1) : load());
+const onTab = (k: string) => (k === 'events' ? loadEvents(1) : load());
 const saveGlobal = async () => {
     await tamperSaveGlobal({ enabled: enabled.value, interval: interval.value }, targetNode.value);
     ElMessage.success(t('pro.tamper.saved'));
@@ -230,26 +336,99 @@ const scan = async (row: TamperSite) => {
 const clearEvents = async () => {
     await ElMessageBox.confirm(t('pro.tamper.clear') + '?', { type: 'warning' });
     await tamperClearEvents(targetNode.value);
-    loadEvents(1);
+    await loadEvents(1);
+    load();
 };
 
 onMounted(load);
 </script>
 
 <style scoped>
-.desc {
-    color: var(--el-text-color-secondary);
-    font-size: 13px;
-    line-height: 1.6;
+.master {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
 }
-.bar {
+.master-info {
+    flex: 1;
+    min-width: 260px;
+}
+.master-title-row {
     display: flex;
     align-items: center;
+    gap: 8px;
+}
+.master-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+}
+.desc {
+    margin-top: 6px;
+    color: var(--el-text-color-secondary);
+    font-size: 12.5px;
+    line-height: 1.6;
+}
+.master-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     gap: 12px;
-    margin-top: 12px;
+}
+.interval-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.interval-label {
+    font-size: 13px;
+    color: var(--el-text-color-regular);
+    white-space: nowrap;
+}
+.v-divider {
+    width: 1px;
+    height: 20px;
+    background: var(--el-border-color-light);
+}
+
+.table-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+.toolbar-left,
+.toolbar-right {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.site-name {
+    font-weight: 500;
+    color: var(--el-text-color-primary);
+}
+.tip-head {
+    border-bottom: 1px dashed var(--el-border-color);
+    cursor: help;
+}
+.num-cell {
+    font-variant-numeric: tabular-nums;
+}
+.text-muted {
+    color: var(--el-text-color-secondary);
+}
+.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12.5px;
 }
 .pager {
-    margin-top: 10px;
+    margin-top: 12px;
     justify-content: flex-end;
 }
 </style>

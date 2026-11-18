@@ -17,8 +17,12 @@ git log --oneline -1
 
 rm -rf "$ROOT_DIR/core/cmd/server/web/assets"
 
+FE_LOG="$(mktemp)"
+CORE_LOG="$(mktemp)"
+AGENT_LOG="$(mktemp)"
+
 cd "$ROOT_DIR/frontend"
-npm run build:pro > /tmp/fe.log 2>&1 && echo "FE_OK" || { tail -20 /tmp/fe.log; exit 1; }
+npm run build:pro > "$FE_LOG" 2>&1 && echo "FE_OK" || { tail -20 "$FE_LOG"; rm -f "$FE_LOG" "$CORE_LOG" "$AGENT_LOG"; exit 1; }
 
 CORE_CONF="$ROOT_DIR/core/cmd/server/conf/app.yaml"
 AGENT_CONF="$ROOT_DIR/agent/cmd/server/conf/app.yaml"
@@ -30,7 +34,7 @@ cp "$AGENT_CONF" "$AGENT_CONF_BAK"
 restore_conf() {
     cp "$CORE_CONF_BAK" "$CORE_CONF" 2>/dev/null || true
     cp "$AGENT_CONF_BAK" "$AGENT_CONF" 2>/dev/null || true
-    rm -f "$CORE_CONF_BAK" "$AGENT_CONF_BAK"
+    rm -f "$CORE_CONF_BAK" "$AGENT_CONF_BAK" "$FE_LOG" "$CORE_LOG" "$AGENT_LOG"
 }
 trap restore_conf EXIT
 
@@ -56,10 +60,10 @@ patch_conf "$AGENT_CONF"
 mkdir -p "$ROOT_DIR/bin"
 
 cd "$ROOT_DIR/core"
-CGO_ENABLED=0 go build -trimpath -tags xpack -ldflags "-s -w" -o "$ROOT_DIR/bin/1panel-core" ./cmd/server > /tmp/core.log 2>&1 && echo "CORE_OK" || { tail -20 /tmp/core.log; exit 1; }
+CGO_ENABLED=0 go build -trimpath -tags xpack -ldflags "-s -w" -o "$ROOT_DIR/bin/1panel-core" ./cmd/server > "$CORE_LOG" 2>&1 && echo "CORE_OK" || { tail -20 "$CORE_LOG"; exit 1; }
 
 cd "$ROOT_DIR/agent"
-CGO_ENABLED=0 go build -trimpath -tags xpack -ldflags "-s -w" -o "$ROOT_DIR/bin/1panel-agent" ./cmd/server > /tmp/agent.log 2>&1 && echo "AGENT_OK" || { tail -20 /tmp/agent.log; exit 1; }
+CGO_ENABLED=0 go build -trimpath -tags xpack -ldflags "-s -w" -o "$ROOT_DIR/bin/1panel-agent" ./cmd/server > "$AGENT_LOG" 2>&1 && echo "AGENT_OK" || { tail -20 "$AGENT_LOG"; exit 1; }
 
 ls -la --time-style=+%H:%M "$ROOT_DIR/bin/"
 echo "BUILD_DONE"

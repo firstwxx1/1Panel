@@ -1,33 +1,44 @@
 <template>
     <div>
         <div class="bar">
-            <el-select v-model="file" style="width: 240px" @change="load">
-                <el-option v-for="f in files" :key="f" :value="f" :label="`${fileLabel(f)} (${f})`" />
-            </el-select>
-            <div>
-                <span class="hint">{{ $t('pro.waf.customHint') }}</span>
-                <el-button type="primary" class="ml-3" @click="openAdd">{{ $t('pro.waf.addRule') }}</el-button>
+            <div class="bar-left">
+                <el-select v-model="file" style="width: 240px" @change="load">
+                    <el-option v-for="f in files" :key="f" :value="f" :label="`${fileLabel(f)} (${f})`" />
+                </el-select>
+                <el-button type="primary" @click="openAdd">{{ $t('pro.waf.addRule') }}</el-button>
+                <el-button type="danger" plain :disabled="!selected.length" @click="remove(selected)">
+                    {{ $t('commons.button.delete') }}
+                </el-button>
             </div>
+            <span class="hint">{{ $t('pro.waf.customHint') }}</span>
         </div>
-        <el-table :data="items" v-loading="loading" size="small" @selection-change="(v: WafRule[]) => (selected = v)">
+
+        <el-table
+            :data="items"
+            v-loading="loading"
+            size="small"
+            @selection-change="(v: WafRule[]) => (selected = v)"
+        >
             <el-table-column type="selection" width="45" />
-            <el-table-column prop="rule" :label="$t('pro.waf.matchContent')" show-overflow-tooltip min-width="280" />
-            <el-table-column prop="name" :label="$t('pro.waf.ruleName')" min-width="140" />
+            <el-table-column :label="$t('pro.waf.matchContent')" show-overflow-tooltip min-width="280">
+                <template #default="{ row }">
+                    <span class="mono">{{ row.rule }}</span>
+                </template>
+            </el-table-column>
+            <el-table-column prop="name" :label="$t('pro.waf.ruleName')" min-width="140" show-overflow-tooltip />
             <el-table-column :label="$t('pro.waf.status')" width="100">
                 <template #default="{ row }">
                     <el-switch :model-value="row.state === 'on'" @change="(v: any) => toggle(row, Boolean(v))" />
                 </template>
             </el-table-column>
-            <el-table-column :label="$t('commons.table.operate')" width="140">
+            <el-table-column :label="$t('commons.table.operate')" width="140" fixed="right">
                 <template #default="{ row }">
                     <el-button link type="primary" @click="openEdit(row)">{{ $t('commons.button.edit') }}</el-button>
                     <el-button link type="danger" @click="remove([row])">{{ $t('commons.button.delete') }}</el-button>
                 </template>
             </el-table-column>
         </el-table>
-        <div class="mt-3">
-            <el-button :disabled="!selected.length" @click="remove(selected)">{{ $t('commons.button.delete') }}</el-button>
-        </div>
+
         <el-dialog v-model="dialog" :title="editing ? $t('commons.button.edit') : $t('pro.waf.addRule')" width="520px">
             <el-form label-position="top">
                 <el-form-item :label="$t('pro.waf.matchContent')">
@@ -76,6 +87,7 @@ const ruleKeyOf = (r: WafRule) => r.id || r.rule || '';
 
 const load = async () => {
     loading.value = true;
+    selected.value = [];
     try {
         const res = await searchWafRules(file.value, '', '', 1, 0, props.node);
         items.value = res.data.items || [];
@@ -145,10 +157,28 @@ onMounted(load);
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
     margin-bottom: 12px;
 }
+
+.bar-left {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.bar-left :deep(.el-button + .el-button) {
+    margin-left: 0;
+}
+
 .hint {
     font-size: 12px;
     color: var(--el-text-color-secondary);
+}
+
+.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 </style>
