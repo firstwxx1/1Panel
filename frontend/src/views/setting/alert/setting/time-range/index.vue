@@ -134,7 +134,6 @@ const defaultResourceValue = [
     'load',
     'disk',
     'nodeException',
-    'licenseException',
     'panelLogin',
     'sshLogin',
 ];
@@ -149,9 +148,6 @@ const generateData = (): Option[] => {
     }
     data.push({ key: 'panelLogin', label: i18n.global.t('xpack.alert.panelLogin'), disabled: false });
     data.push({ key: 'sshLogin', label: i18n.global.t('xpack.alert.sshLogin'), disabled: false });
-    if (isProductPro.value && !isIntl.value && !isEE.value) {
-        data.push({ key: 'licenseException', label: i18n.global.t('xpack.alert.licenseException'), disabled: false });
-    }
     data.push({ key: 'nodeException', label: i18n.global.t('xpack.alert.nodeException'), disabled: false });
     data.push({ key: 'ssl', label: i18n.global.t('xpack.alert.ssl'), disabled: false });
     data.push({ key: 'siteEndTime', label: i18n.global.t('xpack.alert.siteEndTime'), disabled: false });

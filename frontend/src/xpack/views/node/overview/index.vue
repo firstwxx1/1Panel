@@ -211,7 +211,7 @@
                         <el-table-column prop="description" :label="$t('pro.node.description')" min-width="110" show-overflow-tooltip />
                         <el-table-column :label="$t('pro.node.operate')" width="75">
                             <template #default>
-                                <el-link type="primary" :underline="false" @click="go(currentRow, '/databases')">
+                                <el-link type="primary" :underline="false" @click="go(currentRow, dbRoutePath)">
                                     {{ $t('pro.node.backup') }}
                                 </el-link>
                             </template>
@@ -244,14 +244,16 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh, Search } from '@element-plus/icons-vue';
 import { useI18n } from 'vue-i18n';
-import router from '@/routers';
-import { GlobalStore } from '@/store';
+import { GlobalStore, MenuStore } from '@/store';
+import { getAgentSettingInfo } from '@/api/modules/setting';
+import { routerToPathWithQuery } from '@/utils/router';
 import { getGroupList } from '@/api/modules/group';
 import { NodeRow, nodeQuery, restartNode, searchNodes } from '@/xpack/api/node';
 import Section from './section.vue';
 
 const { t } = useI18n();
 const globalStore = GlobalStore();
+const menuStore = MenuStore();
 
 const groups = ref<{ id: number; name: string; isDefault: boolean }[]>([]);
 const groupID = ref(0);
@@ -306,11 +308,21 @@ const refreshAll = () => {
 };
 
 // jumping to a node's own page works by making it the operating node first
-const go = (n: NodeRow, path: string) => {
-    globalStore.currentNode = nodeName(n);
+const go = async (n: NodeRow, path: string) => {
+    const targetNode = nodeName(n);
+    globalStore.currentNode = targetNode;
     globalStore.currentNodeAddr = n.addr;
     localStorage.removeItem('dashboardCache');
-    router.push(path);
+    menuStore.setMenuList([]);
+    try {
+        const res = await getAgentSettingInfo(targetNode);
+        if (res?.data) {
+            globalStore.defaultNetwork = res.data.defaultNetwork;
+        }
+    } catch {
+        // ignore transient agent setting fetch errors
+    }
+    await routerToPathWithQuery(path, { uncached: 'true' });
 };
 
 const restart = async (n: NodeRow) => {
@@ -367,6 +379,13 @@ const loadCrons = async (q: any) => {
 };
 
 const dbType = ref('mysql');
+const dbRoutePath = computed(() =>
+    dbType.value === 'postgresql'
+        ? '/databases/postgresql'
+        : dbType.value === 'mongodb'
+          ? '/databases/mongodb'
+          : '/databases/mysql',
+);
 const dbServer = ref('');
 const dbServers = ref<string[]>([]);
 const dbToken = ref(0);

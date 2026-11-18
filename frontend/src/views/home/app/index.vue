@@ -150,7 +150,7 @@ import { jumpToInstall } from '@/utils/app';
 import { routerToName, routerToNameWithQuery } from '@/utils/router';
 import { useGlobalStore } from '@/composables/useGlobalStore';
 
-const { isMobile, isAdminOrNodeAdmin } = useGlobalStore();
+const { isMobile, isAdminOrNodeAdmin, currentNode } = useGlobalStore();
 let loading = ref(false);
 let apps = ref([]);
 const options = ref([]);
@@ -233,7 +233,7 @@ const loadOption = async () => {
 const getAppIconSrc = (app: any) => {
     const icon = app?.icon || '';
     if (icon.startsWith('app_') || icon === '') {
-        return getAppIconUrl(app.key);
+        return getAppIconUrl(app.key, currentNode.value);
     }
     return `data:image/png;base64,${icon}`;
 };

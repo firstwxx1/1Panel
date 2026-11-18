@@ -229,6 +229,5 @@ export const cronjobTypes = [
     { value: 'clean', label: i18n.global.t('setting.diskClean') },
     { value: 'snapshot', label: i18n.global.t('cronjob.snapshot') },
     { value: 'ntp', label: i18n.global.t('cronjob.ntp') },
-    { value: 'syncIpGroup', label: i18n.global.t('cronjob.syncIpGroup') },
     { value: 'cleanLog', label: i18n.global.t('cronjob.cleanLog') },
 ];

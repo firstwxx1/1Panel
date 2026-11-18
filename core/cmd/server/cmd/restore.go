@@ -67,7 +67,7 @@ var restoreCmd = &cobra.Command{
 		}
 		_, _ = cmdUtils.NewCommandMgr().RunWithStdout("chmod", "755", "/usr/local/bin/1pctl")
 		_, _ = cmdUtils.NewCommandMgr().RunWithStdout("cp", "-r", path.Join(tmpPath, "lang"), "/usr/local/bin")
-		geoPath := path.Join(global.CONF.Base.InstallDir, "1panel/geo")
+		geoPath := path.Join(baseDir, "1panel/geo")
 		_ = os.MkdirAll(geoPath, os.ModePerm)
 		_, _ = cmdUtils.NewCommandMgr().RunWithStdout("cp", path.Join(tmpPath, "GeoIP.mmdb"), geoPath+"/")
 
@@ -97,13 +97,25 @@ var restoreCmd = &cobra.Command{
 			dbPath := path.Join(baseDir, "1panel")
 			targetDBDir := path.Join(dbPath, "db")
 			if err := os.RemoveAll(targetDBDir); err != nil {
-				global.LOG.Errorf("rollback 1panel db cleanup failed, err: %v", err)
+				if global.LOG != nil {
+					global.LOG.Errorf("rollback 1panel db cleanup failed, err: %v", err)
+				} else {
+					fmt.Printf("rollback 1panel db cleanup failed, err: %v\n", err)
+				}
 			}
 			if err := files.CopyItem(true, true, path.Join(tmpPath, "db"), dbPath); err != nil {
-				global.LOG.Errorf("rollback 1panel db failed, err: %v", err)
+				if global.LOG != nil {
+					global.LOG.Errorf("rollback 1panel db failed, err: %v", err)
+				} else {
+					fmt.Printf("rollback 1panel db failed, err: %v\n", err)
+				}
 			}
 			if err := cleanOrphanSQLiteSidecars(targetDBDir); err != nil {
-				global.LOG.Errorf("rollback 1panel db sidecar cleanup failed, err: %v", err)
+				if global.LOG != nil {
+					global.LOG.Errorf("rollback 1panel db sidecar cleanup failed, err: %v", err)
+				} else {
+					fmt.Printf("rollback 1panel db sidecar cleanup failed, err: %v\n", err)
+				}
 			}
 		}
 

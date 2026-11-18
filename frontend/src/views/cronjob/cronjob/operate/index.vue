@@ -880,7 +880,7 @@ import { useGlobalStore } from '@/composables/useGlobalStore';
 import LicenseImport from '@/components/license-import/index.vue';
 import { splitTimeFromSecond, transferTimeToSecond } from '@/utils/validate';
 import { getGroupList } from '@/api/modules/group';
-import { routerToName, routerToPath } from '@/utils/router';
+import { routerToName, routerToPath, routerToPathWithQuery } from '@/utils/router';
 import { loadBaseDir } from '@/api/modules/setting';
 import { getAlertConfigDisplayName } from '@/views/setting/alert/setting/drawer/secret-field';
 import { cronjobAlertModes, normalizeCronjobAlertMode } from '@/utils/cronjob-alert';
@@ -1179,8 +1179,7 @@ const goRouter = async (path: string) => {
 };
 
 const goWafIpGroup = async () => {
-    localStorage.setItem('black-white-tab', '3');
-    routerToPath('/xpack/waf/blackwhite');
+    routerToPathWithQuery('/xpack/waf', { tab: 'blackWhite', uncached: 'true' });
 };
 
 const containerOptions = ref([]);

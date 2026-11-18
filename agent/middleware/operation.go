@@ -172,8 +172,6 @@ func newResolveDB(pathItem string) (*gorm.DB, error) {
 	switch {
 	case strings.HasPrefix(pathItem, "/core"):
 		dbFile = path.Join(global.CONF.Base.InstallDir, "1panel/db/core.db")
-	case strings.HasPrefix(pathItem, "/xpack"):
-		dbFile = path.Join(global.CONF.Base.InstallDir, "1panel/db/xpack.db")
 	default:
 		dbFile = path.Join(global.CONF.Base.InstallDir, "1panel/db/agent.db")
 	}
@@ -196,6 +194,9 @@ func newResolveDB(pathItem string) (*gorm.DB, error) {
 }
 
 func closeResolveDB(db *gorm.DB) {
+	if db == nil {
+		return
+	}
 	sqlDB, err := db.DB()
 	if err != nil {
 		return

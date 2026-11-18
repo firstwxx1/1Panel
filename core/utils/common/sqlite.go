@@ -21,6 +21,9 @@ func LoadDBConnByPath(fullPath, dbName string) *gorm.DB {
 }
 
 func CloseDB(db *gorm.DB) {
+	if db == nil {
+		return
+	}
 	sqlDB, err := db.DB()
 	if err != nil {
 		return

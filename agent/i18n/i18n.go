@@ -173,6 +173,17 @@ func newLocalizer(lang string) *i18n.Localizer {
 	return i18n.NewLocalizer(bundle, lang)
 }
 
+func SetLanguage(lang string) {
+	if bundle == nil {
+		return
+	}
+	lang = strings.TrimSpace(lang)
+	if lang == "" {
+		lang = GetLanguageFromDB()
+	}
+	global.I18n = i18n.NewLocalizer(bundle, lang)
+}
+
 func GetLanguageFromDB() string {
 	if global.DB == nil {
 		return "en"

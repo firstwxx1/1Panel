@@ -132,7 +132,7 @@ export const syncCutomAppStore = (req: App.AppStoreSync) => {
 };
 
 export const getCurrentNodeCustomAppConfig = () => {
-    return http.get<App.CustomAppStoreConfig>(`/custom/app/config`);
+    return http.get<App.CustomAppStoreConfig>(`/custom/app/config`, undefined, { skipErrorMessage: true });
 };
 
 export function getAppIconUrl(appKey: string, node?: string): string {

@@ -1,6 +1,21 @@
 import { jumpToPath } from './router';
 import router from '@/routers';
 import { GlobalStore } from '@/store';
+import { vllmAvailable } from '@/views/ai/model/deployment';
+
+const jumpIfRouteExists = (target: string) => {
+    const resolved = router.resolve(target);
+    if (
+        !resolved.matched.length ||
+        resolved.name === '404' ||
+        resolved.path.startsWith('/error') ||
+        resolved.matched.some((m) => m.path.includes('pathMatch'))
+    ) {
+        return false;
+    }
+    jumpToPath(router, target);
+    return true;
+};
 
 export const jumpToInstall = (type: string, key: string) => {
     const globalStore = GlobalStore();
@@ -42,7 +57,7 @@ export const jumpToInstall = (type: string, key: string) => {
             router.push({ path: '/ai/model/local', query: { engine: 'ollama', uncached: 'true', open: 'create' } });
             return true;
         case 'vllm':
-            if (globalStore.isProductPro) {
+            if (globalStore.isProductPro && vllmAvailable) {
                 router.push({
                     path: '/ai/model/local',
                     query: {
@@ -55,14 +70,11 @@ export const jumpToInstall = (type: string, key: string) => {
             }
             return false;
         case 'mysql-cluster':
-            jumpToPath(router, '/xpack/cluster/mysql');
-            return true;
+            return jumpIfRouteExists('/xpack/cluster/mysql');
         case 'redis-cluster':
-            jumpToPath(router, '/xpack/cluster/redis');
-            return true;
+            return jumpIfRouteExists('/xpack/cluster/redis');
         case 'postgresql-cluster':
-            jumpToPath(router, '/xpack/cluster/postgres');
-            return true;
+            return jumpIfRouteExists('/xpack/cluster/postgres');
     }
     return false;
 };

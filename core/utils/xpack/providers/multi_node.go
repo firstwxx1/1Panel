@@ -15,6 +15,7 @@ type MultiNodeProvider interface {
 	LoadNodeInfo(currentNode string) (*ssh.ConnInfo, string, error)
 	Sync(dataType string) error
 	AutoUpgradeWithMaster()
+	ProxyScriptRun(c *gin.Context, currentNode, script string) error
 
 	LoadRequestTransport() *http.Transport
 }

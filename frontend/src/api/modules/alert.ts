@@ -2,16 +2,12 @@ import http from '@/api';
 import { ResPage } from '@/api/interface';
 import { Alert } from '../interface/alert';
 import { deepCopy } from '@/utils/misc';
-import { GlobalStore } from '@/store';
 
 const alertConfigHiddenTypes = ['sms'];
 
 const resolveAlertConfigExcludeTypes = (excludeTypes: string[] = []) => {
-    const globalStore = GlobalStore();
     const types = new Set(excludeTypes);
-    if (globalStore.isIntl || globalStore.isEE || !globalStore.isProductPro) {
-        alertConfigHiddenTypes.forEach((type) => types.add(type));
-    }
+    alertConfigHiddenTypes.forEach((type) => types.add(type));
     return Array.from(types);
 };
 

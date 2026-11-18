@@ -81,6 +81,26 @@ const xpackRouter = {
                 title: 'pro.node.title',
             },
         },
+        {
+            path: '/xpack/simple-node',
+            name: 'SimpleNode',
+            redirect: '/xpack/node?tab=panelManage',
+            hidden: true,
+            meta: {
+                hideInMenu: true,
+                ignoreTab: true,
+            },
+        },
+        {
+            path: '/xpack/waf/blackwhite',
+            name: 'WafBlackWhiteRedirect',
+            redirect: '/xpack/waf?tab=blackWhite',
+            hidden: true,
+            meta: {
+                hideInMenu: true,
+                ignoreTab: true,
+            },
+        },
     ],
 };
 

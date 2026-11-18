@@ -9,18 +9,30 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/1Panel-dev/1Panel/core/app/model"
+	"github.com/1Panel-dev/1Panel/core/app/repo"
 	"github.com/1Panel-dev/1Panel/core/constant"
 	"github.com/1Panel-dev/1Panel/core/global"
 	"github.com/1Panel-dev/1Panel/core/init/proxy"
 	"github.com/1Panel-dev/1Panel/core/utils/encrypt"
 	"github.com/1Panel-dev/1Panel/core/utils/ssh"
+	"github.com/1Panel-dev/1Panel/core/utils/xpack/providers"
 	"github.com/gin-gonic/gin"
 )
+
+const (
+	dockerSystemdDropInDir  = "/etc/systemd/system/docker.service.d"
+	dockerSystemdDropInFile = "/etc/systemd/system/docker.service.d/http-proxy.conf"
+)
+
+var _ providers.MultiNodeProvider = (*Provider)(nil)
 
 // Provider is the xpack multi-node implementation: it forwards a request to the
 // child agent named by the CurrentNode header over mutual TLS.
@@ -114,7 +126,11 @@ func (p *Provider) Proxy(c *gin.Context, currentNode string) {
 	}
 	target := net.JoinHostPort(n.Addr, fmt.Sprint(n.Port))
 	rp := &httputil.ReverseProxy{
+		FlushInterval: -1,
 		Rewrite: func(r *httputil.ProxyRequest) {
+			if r.In.Form == nil {
+				r.Out.URL.RawQuery = r.In.URL.RawQuery
+			}
 			r.Out.URL.Scheme = "https"
 			r.Out.URL.Host = target
 			r.Out.Host = target
@@ -136,13 +152,122 @@ func (p *Provider) Proxy(c *gin.Context, currentNode string) {
 	c.Abort()
 }
 
-func (p *Provider) ProxyDocker(proxyURL string) error { return nil }
-
-func (p *Provider) UpdateGroup(name string, group, newGroup uint) error {
-	if name != "node" {
+func (p *Provider) ProxyDocker(proxyURL string) error {
+	if global.DB == nil {
 		return nil
 	}
-	return global.DB.Model(&model.Node{}).Where("group_id = ?", group).Update("group_id", newGroup).Error
+	status := constant.StatusDisable
+	if strings.TrimSpace(proxyURL) != "" {
+		status = constant.StatusEnable
+	}
+	if err := repo.NewISettingRepo().UpdateOrCreate("ProxyDocker", status); err != nil {
+		return err
+	}
+	applyLocalDockerSystemdProxy(proxyURL)
+	return nil
+}
+
+func GetProxyDockerStatus() string {
+	if global.DB == nil {
+		return constant.StatusDisable
+	}
+	val, err := repo.NewISettingRepo().GetValueByKey("ProxyDocker")
+	if err != nil || strings.TrimSpace(val) != constant.StatusEnable {
+		return constant.StatusDisable
+	}
+	return constant.StatusEnable
+}
+
+func applyLocalDockerSystemdProxy(proxyURL string) {
+	if _, err := os.Stat("/etc/systemd/system"); err != nil {
+		return
+	}
+	trimmed := strings.TrimSpace(proxyURL)
+	if trimmed == "" {
+		if _, err := os.Stat(dockerSystemdDropInFile); err != nil {
+			return
+		}
+		_ = os.Remove(dockerSystemdDropInFile)
+	} else {
+		if err := os.MkdirAll(dockerSystemdDropInDir, 0o755); err != nil {
+			return
+		}
+		escaped := strings.ReplaceAll(trimmed, `"`, `\"`)
+		content := fmt.Sprintf("[Service]\nEnvironment=\"HTTP_PROXY=%s\"\nEnvironment=\"HTTPS_PROXY=%s\"\nEnvironment=\"NO_PROXY=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16\"\n", escaped, escaped)
+		if err := os.WriteFile(dockerSystemdDropInFile, []byte(content), 0o644); err != nil {
+			return
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = exec.CommandContext(ctx, "systemctl", "daemon-reload").Run()
+}
+
+func buildDockerProxyURL(proxyType, proxyUrl, proxyPort, proxyUser, plainPasswd, proxyDocker string) string {
+	if proxyDocker != constant.StatusEnable || proxyType == "" || proxyType == "close" || strings.TrimSpace(proxyUrl) == "" {
+		return ""
+	}
+	var account string
+	if proxyUser != "" {
+		account = proxyUser
+		if plainPasswd != "" {
+			account += ":" + plainPasswd
+		}
+		account += "@"
+	}
+	host := strings.ReplaceAll(proxyUrl, proxyType+"://", "")
+	if proxyPort != "" {
+		return fmt.Sprintf("%s://%s%s:%s", proxyType, account, host, proxyPort)
+	}
+	return fmt.Sprintf("%s://%s%s", proxyType, account, host)
+}
+
+func (p *Provider) UpdateGroup(name string, group, newGroup uint) error {
+	if global.DB == nil {
+		return nil
+	}
+	switch name {
+	case "node":
+		return global.DB.Model(&model.Node{}).Where("group_id = ?", group).Update("group_id", newGroup).Error
+	case "website", "cronjob":
+		var targets []string
+		if name == "cronjob" {
+			targets = append(targets, "local")
+		}
+		var nodes []model.Node
+		if err := global.DB.Where("kind = ? AND status = ?", kindNode, statusHealthy).Find(&nodes).Error; err == nil {
+			for _, n := range nodes {
+				if n.Addr != "" {
+					targets = append(targets, n.Name)
+				}
+			}
+		}
+		if len(targets) == 0 {
+			return nil
+		}
+		payload := map[string]interface{}{
+			"groupUpdate": map[string]interface{}{
+				"type":  name,
+				"oldId": group,
+				"newId": newGroup,
+			},
+		}
+		var errs []string
+		for _, target := range targets {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			err := agentJSONCtx(ctx, target, http.MethodPost, "/xpack/node/sync-meta", payload, nil)
+			cancel()
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", target, err))
+			}
+		}
+		if len(errs) > 0 {
+			return errors.New(strings.Join(errs, "; "))
+		}
+		return nil
+	default:
+		return nil
+	}
 }
 
 func (p *Provider) CheckBackupUsed(name string) error {
@@ -173,10 +298,72 @@ func (p *Provider) LoadNodeInfo(currentNode string) (*ssh.ConnInfo, string, erro
 	return nil, "", fmt.Errorf("SSH credentials are not stored on master for node %q", currentNode)
 }
 
+func (p *Provider) ProxyScriptRun(c *gin.Context, currentNode, script string) error {
+	if global.DB == nil {
+		return errors.New("database is not initialized")
+	}
+	var n model.Node
+	if err := global.DB.Where("name = ? AND kind = ?", currentNode, kindNode).First(&n).Error; err != nil {
+		return fmt.Errorf("node not found: %s", currentNode)
+	}
+	if n.Addr == "" || n.Status == statusPending {
+		return fmt.Errorf("node is not ready: %s", currentNode)
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+	var staged struct {
+		Token string `json:"token"`
+	}
+	if err := agentJSONCtx(ctx, currentNode, http.MethodPost, "/xpack/node/script-stage", map[string]string{"script": script}, &staged); err != nil {
+		return err
+	}
+	if staged.Token == "" {
+		return errors.New("empty script stage token from node")
+	}
+	tr, err := p.agentTransport()
+	if err != nil {
+		return err
+	}
+	cols := c.DefaultQuery("cols", "80")
+	rows := c.DefaultQuery("rows", "40")
+	target := net.JoinHostPort(n.Addr, fmt.Sprint(n.Port))
+	rawQuery := "token=" + url.QueryEscape(staged.Token) + "&cols=" + url.QueryEscape(cols) + "&rows=" + url.QueryEscape(rows)
+	var proxyErr error
+	rp := &httputil.ReverseProxy{
+		FlushInterval: -1,
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.Out.URL.Scheme = "https"
+			r.Out.URL.Host = target
+			r.Out.Host = target
+			r.Out.URL.Path = "/api/v2/xpack/node/script-run"
+			r.Out.URL.RawPath = ""
+			r.Out.URL.RawQuery = rawQuery
+			r.Out.Header.Set("Proxy-Id", n.ProxyID)
+			r.SetXForwarded()
+		},
+		Transport: tr,
+		ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
+			proxyErr = err
+		},
+	}
+	defer func() {
+		if rec := recover(); rec != nil && rec != http.ErrAbortHandler {
+			global.LOG.Debug(rec)
+		}
+	}()
+	rp.ServeHTTP(c.Writer, c.Request)
+	if proxyErr != nil && !c.Writer.Written() {
+		return proxyErr
+	}
+	c.Abort()
+	return nil
+}
+
 func (p *Provider) Sync(dataType string) error {
 	if global.DB == nil {
 		return nil
 	}
+	settingRepo := repo.NewISettingRepo()
 	payload := map[string]interface{}{}
 	if dataType == constant.SyncBackupAccounts || dataType == "" {
 		var backups []model.BackupAccount
@@ -211,6 +398,46 @@ func (p *Provider) Sync(dataType string) error {
 		}
 		payload["scripts"] = items
 	}
+	if dataType == constant.SyncLanguage || dataType == "" {
+		if lang, err := settingRepo.GetValueByKey("Language"); err == nil && strings.TrimSpace(lang) != "" {
+			payload["language"] = strings.TrimSpace(lang)
+		}
+	}
+	if dataType == constant.SyncEdition || dataType == "" {
+		if edition, err := settingRepo.GetValueByKey("Edition"); err == nil && strings.TrimSpace(edition) != "" {
+			payload["edition"] = strings.TrimSpace(edition)
+		}
+	}
+	if dataType == constant.SyncSystemProxy || dataType == constant.SyncSystemProxyWithRestartDocker || dataType == "" {
+		proxyType, _ := settingRepo.GetValueByKey("ProxyType")
+		proxyUrl, _ := settingRepo.GetValueByKey("ProxyUrl")
+		proxyPort, _ := settingRepo.GetValueByKey("ProxyPort")
+		proxyUser, _ := settingRepo.GetValueByKey("ProxyUser")
+		proxyPasswd, _ := settingRepo.GetValueByKey("ProxyPasswd")
+		proxyPasswdKeep, _ := settingRepo.GetValueByKey("ProxyPasswdKeep")
+		proxyDocker := GetProxyDockerStatus()
+
+		plainPasswd := ""
+		if proxyPasswd != "" {
+			if dec, err := encrypt.StringDecrypt(proxyPasswd); err == nil {
+				plainPasswd = dec
+			} else {
+				plainPasswd = proxyPasswd
+			}
+		}
+		dockerProxyURL := buildDockerProxyURL(proxyType, proxyUrl, proxyPort, proxyUser, plainPasswd, proxyDocker)
+		payload["systemProxy"] = map[string]interface{}{
+			"type":              proxyType,
+			"url":               proxyUrl,
+			"port":              proxyPort,
+			"user":              proxyUser,
+			"passwd":            plainPasswd,
+			"passwdKeep":        proxyPasswdKeep,
+			"proxyDocker":       proxyDocker,
+			"dockerProxyUrl":    dockerProxyURL,
+			"withDockerRestart": dataType == constant.SyncSystemProxyWithRestartDocker,
+		}
+	}
 	if len(payload) == 0 {
 		return nil
 	}
@@ -224,9 +451,13 @@ func (p *Provider) Sync(dataType string) error {
 			}
 		}
 	}
+	syncTimeout := 15 * time.Second
+	if dataType == constant.SyncSystemProxyWithRestartDocker {
+		syncTimeout = 60 * time.Second
+	}
 	var errs []string
 	for _, target := range targets {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), syncTimeout)
 		err := agentJSONCtx(ctx, target, http.MethodPost, "/xpack/node/sync-meta", payload, nil)
 		cancel()
 		if err != nil {
@@ -280,7 +511,49 @@ func RevokeChildTerminals(scope, userID, authSessionID string) error {
 }
 
 func (p *Provider) LoadRequestTransport() *http.Transport {
+	proxyFunc := http.ProxyFromEnvironment
+	if global.DB != nil {
+		settingRepo := repo.NewISettingRepo()
+		proxyType, _ := settingRepo.GetValueByKey("ProxyType")
+		proxyUrl, _ := settingRepo.GetValueByKey("ProxyUrl")
+		proxyPort, _ := settingRepo.GetValueByKey("ProxyPort")
+		proxyUser, _ := settingRepo.GetValueByKey("ProxyUser")
+		proxyPasswd, _ := settingRepo.GetValueByKey("ProxyPasswd")
+
+		proxyType = strings.ToLower(strings.TrimSpace(proxyType))
+		proxyUrl = strings.TrimSpace(proxyUrl)
+		proxyPort = strings.TrimSpace(proxyPort)
+		if (proxyType == "http" || proxyType == "https" || proxyType == "socks5") && proxyUrl != "" {
+			rawURL := proxyUrl
+			if !strings.Contains(rawURL, "://") {
+				host := rawURL
+				if ip := net.ParseIP(host); ip != nil && strings.Contains(host, ":") {
+					host = "[" + host + "]"
+				}
+				rawURL = proxyType + "://" + host
+			}
+			if u, err := url.Parse(rawURL); err == nil && u.Host != "" {
+				if proxyPort != "" && u.Port() == "" {
+					u.Host = net.JoinHostPort(u.Hostname(), proxyPort)
+				}
+				if proxyUser != "" {
+					plainPass := ""
+					if proxyPasswd != "" {
+						if dec, decErr := encrypt.StringDecrypt(proxyPasswd); decErr == nil {
+							plainPass = dec
+						} else {
+							plainPass = proxyPasswd
+						}
+					}
+					u.User = url.UserPassword(proxyUser, plainPass)
+				}
+				proxyFunc = http.ProxyURL(u)
+			}
+		}
+	}
+
 	return &http.Transport{
+		Proxy:           proxyFunc,
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		DialContext: (&net.Dialer{
 			Timeout:   60 * time.Second,
@@ -298,6 +571,7 @@ func (p *Provider) resetTransport() {
 	defer p.mu.Unlock()
 	if p.transport != nil {
 		p.transport.CloseIdleConnections()
+		p.transport = nil
 	}
 }
 

@@ -2,6 +2,7 @@ package router
 
 import (
 	v2 "github.com/1Panel-dev/1Panel/agent/app/api/v2"
+	"github.com/1Panel-dev/1Panel/agent/app/api/v2/helper"
 	"github.com/gin-gonic/gin"
 )
 
@@ -30,4 +31,11 @@ func (a *AlertRouter) InitRouter(Router *gin.RouterGroup) {
 		alertRouter.POST("/config/del", baseApi.DeleteAlertConfig)
 		alertRouter.POST("/config/test", baseApi.TestAlertConfig)
 	}
+
+	Router.POST("/xpack/alert/logs/sync", func(c *gin.Context) {
+		helper.Success(c)
+	})
+	Router.POST("/xpack/alert/logs/sync/all", func(c *gin.Context) {
+		helper.Success(c)
+	})
 }

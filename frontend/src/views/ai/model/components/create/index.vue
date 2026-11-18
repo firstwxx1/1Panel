@@ -105,7 +105,7 @@
             />
             <template v-if="selected === 'vllm' && (!isProductPro || !vllmAvailable)">
                 <el-alert :title="$t('license.vllm')" type="info" :closable="false" />
-                <el-button class="mt-4" type="primary" @click="openVllmLicense">
+                <el-button v-if="!isProductPro" class="mt-4" type="primary" @click="openVllmLicense">
                     {{ $t('license.levelUpPro') }}
                 </el-button>
             </template>
@@ -218,7 +218,7 @@ watch(
 const open = async (engine?: 'ollama' | 'vllm' | 'tensorrt', defaultModelDir = '') => {
     loadFailed.value = false;
     modelDir.value = defaultModelDir;
-    selected.value = props.vllmOnly ? 'vllm' : engine || (props.enginesOnly ? 'vllm' : 'account');
+    selected.value = props.vllmOnly ? 'vllm' : engine || (props.enginesOnly ? (vllmAvailable ? 'vllm' : 'ollama') : 'account');
     dockerActive.value = false;
     dockerExists.value = true;
     ollama.value = undefined;

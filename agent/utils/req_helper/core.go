@@ -20,6 +20,9 @@ import (
 )
 
 func PostLocalCore(url string) error {
+	if !global.IsMaster || global.CoreDB == nil {
+		return nil
+	}
 	var serverPortSetting model.Setting
 	_ = global.CoreDB.Model(&model.Setting{}).Where("key = ?", "ServerPort").First(&serverPortSetting).Error
 	var sslStatusSetting model.Setting

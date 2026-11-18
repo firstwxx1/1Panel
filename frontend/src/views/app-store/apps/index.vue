@@ -264,11 +264,13 @@ onMounted(async () => {
     }
     search(req);
     if (isProductPro.value) {
-        const res = await getCurrentNodeCustomAppConfig();
-        if (res && res.data) {
-            customAppStoreEnabled.value = res.data.status === 'Enable';
-            syncCustomAppstore.value = customAppStoreEnabled.value;
-        }
+        try {
+            const res = await getCurrentNodeCustomAppConfig();
+            if (res && res.data) {
+                customAppStoreEnabled.value = res.data.status === 'Enable';
+                syncCustomAppstore.value = customAppStoreEnabled.value;
+            }
+        } catch {}
     } else {
         syncCustomAppstore.value = isOffline.value;
     }

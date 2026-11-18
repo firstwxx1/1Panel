@@ -12,6 +12,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -169,8 +170,8 @@ func pushBinaryStream(n model.Node, apiPath, filePath string, headers map[string
 		}
 	}()
 
-	url := "https://" + net.JoinHostPort(n.Addr, fmt.Sprint(n.Port)) + apiPath
-	req, err := http.NewRequest(http.MethodPost, url, pr)
+	reqURL := "https://" + net.JoinHostPort(n.Addr, fmt.Sprint(n.Port)) + apiPath
+	req, err := http.NewRequest(http.MethodPost, reqURL, pr)
 	if err != nil {
 		return err
 	}
@@ -348,7 +349,11 @@ func UpgradeNodes(ids []uint) ([]UpgradeNodeResult, error) {
 			} else {
 				clearGeoSynced(n.ID)
 			}
-			err := pushBinaryStream(n, "/api/v2/xpack/node/upgrade", binPath, map[string]string{
+			upgradePath := "/api/v2/xpack/node/upgrade"
+			if ver != "" {
+				upgradePath += "?version=" + url.QueryEscape(ver)
+			}
+			err := pushBinaryStream(n, upgradePath, binPath, map[string]string{
 				"X-Sha256":  shaSum,
 				"X-Arch":    runtime.GOARCH,
 				"X-Version": ver,
@@ -470,7 +475,7 @@ func upgradeLegacyNode(n model.Node, binPath string) error {
 	}
 
 	// Decompress into /tmp/1panel-agent-up (async task), wait until extracted, move over /usr/local/bin/1panel-agent, wait until moved, clean up, and restart.
-	if err := agentJSON(n.Name, http.MethodPost, "/api/v2/files/decompress", map[string]interface{}{
+	if err := agentJSON(n.Name, http.MethodPost, "/files/decompress", map[string]interface{}{
 		"path": "/tmp/1panel-agent-up.tar.gz",
 		"dst":  "/tmp/1panel-agent-up",
 		"type": "tar.gz",
@@ -480,7 +485,7 @@ func upgradeLegacyNode(n model.Node, binPath string) error {
 	if !waitRemoteFile(n.Name, "/tmp/1panel-agent-up/1panel-agent", true, 45*time.Second) {
 		return errors.New("legacy decompress timed out waiting for /tmp/1panel-agent-up/1panel-agent")
 	}
-	if err := agentJSON(n.Name, http.MethodPost, "/api/v2/files/move", map[string]interface{}{
+	if err := agentJSON(n.Name, http.MethodPost, "/files/move", map[string]interface{}{
 		"type":     "cut",
 		"oldPaths": []string{"/tmp/1panel-agent-up/1panel-agent"},
 		"newPath":  "/usr/local/bin",
@@ -492,12 +497,12 @@ func upgradeLegacyNode(n model.Node, binPath string) error {
 	if !waitRemoteFile(n.Name, "/tmp/1panel-agent-up/1panel-agent", false, 30*time.Second) {
 		return errors.New("legacy move timed out waiting for cut completion")
 	}
-	_ = agentJSON(n.Name, http.MethodPost, "/api/v2/files/del", map[string]interface{}{
+	_ = agentJSON(n.Name, http.MethodPost, "/files/del", map[string]interface{}{
 		"path":        "/tmp/1panel-agent-up.tar.gz",
 		"isDir":       false,
 		"forceDelete": true,
 	}, nil)
-	_ = agentJSON(n.Name, http.MethodPost, "/api/v2/files/del", map[string]interface{}{
+	_ = agentJSON(n.Name, http.MethodPost, "/files/del", map[string]interface{}{
 		"path":        "/tmp/1panel-agent-up",
 		"isDir":       true,
 		"forceDelete": true,
@@ -512,7 +517,7 @@ func waitRemoteFile(nodeName, filePath string, wantExist bool, timeout time.Dura
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		var exists bool
-		if err := agentJSON(nodeName, http.MethodPost, "/api/v2/files/check", map[string]interface{}{
+		if err := agentJSON(nodeName, http.MethodPost, "/files/check", map[string]interface{}{
 			"path": filePath,
 		}, &exists); err == nil && exists == wantExist {
 			return true

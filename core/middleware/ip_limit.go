@@ -30,6 +30,12 @@ func WhiteAllow() gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		if strings.HasPrefix(c.Request.URL.Path, "/api/v2/core/nodejoin/") ||
+			IsPublicFileShareAPI(c.Request.URL.Path) ||
+			strings.HasPrefix(c.Request.URL.Path, "/s/") {
+			c.Next()
+			return
+		}
 
 		settingRepo := repo.NewISettingRepo()
 		trustedProxies, err := settingRepo.GetValueByKey("AllowIPTrustedProxies")

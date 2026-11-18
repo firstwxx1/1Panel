@@ -1,12 +1,12 @@
 <template>
     <div>
         <LayoutContent v-loading="loading" :title="$t('setting.license')">
-            <template #leftToolBar>
+            <template #leftToolBar v-if="data?.length">
                 <el-button type="primary" @click="toUpload()">
                     {{ $t('commons.button.add') }}
                 </el-button>
             </template>
-            <template #prompt>
+            <template #prompt v-if="data?.length">
                 <el-alert type="info" :title="$t('license.licenseAlert')" :closable="false" />
             </template>
             <template #rightToolBar>
@@ -63,6 +63,7 @@
                         show-overflow-tooltip
                     />
                     <fu-table-operations
+                        v-if="data?.length"
                         width="300px"
                         :buttons="buttons"
                         :ellipsis="10"
@@ -125,7 +126,7 @@ const unbindRow = ref();
 
 const withDockerRestart = ref();
 
-const data = ref();
+const data = ref([]);
 const paginationConfig = reactive({
     currentPage: 1,
     pageSize: 20,
@@ -230,7 +231,7 @@ const search = async () => {
     await searchLicense(params)
         .then((res) => {
             loading.value = false;
-            data.value = res.data.items || [];
+            data.value = res?.data?.items || [];
             for (const item of data.value) {
                 item.productName = 'product-1panel-pro';
                 item.expiresAt = item.productPro === '0' ? '' : timestampToDate(Number(item.productPro));
@@ -245,9 +246,11 @@ const search = async () => {
                 }
                 return a.status.localeCompare(b.status);
             });
-            paginationConfig.total = res.data.total;
+            paginationConfig.total = res?.data?.total || 0;
         })
         .catch(() => {
+            data.value = [];
+            paginationConfig.total = 0;
             loading.value = false;
         });
 };

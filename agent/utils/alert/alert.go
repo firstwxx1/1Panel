@@ -535,6 +535,9 @@ func getValueByIndex(params []dto.Param, index string) string {
 }
 
 func CountRecentFailedLoginLogs(minutes uint, failCount uint) (int, bool, error) {
+	if global.CoreDB == nil {
+		return 0, false, nil
+	}
 	now := time.Now()
 	startTime := now.Add(-time.Duration(minutes) * time.Minute)
 	db := global.CoreDB.Model(&model.LoginLog{})
@@ -548,6 +551,9 @@ func CountRecentFailedLoginLogs(minutes uint, failCount uint) (int, bool, error)
 }
 
 func FindRecentSuccessLoginsNotInWhitelist(minutes int, whitelist []string) ([]model.LoginLog, error) {
+	if global.CoreDB == nil {
+		return nil, nil
+	}
 	now := time.Now()
 	startTime := now.Add(-time.Duration(minutes) * time.Minute)
 

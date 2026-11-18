@@ -280,7 +280,7 @@ func loadUpgradeTree(fileOp fileUtils.FileOp) dto.CleanTree {
 		sort.Slice(upgradeTree.Children, func(i, j int) bool {
 			return common.CompareVersion(upgradeTree.Children[i].Label, upgradeTree.Children[j].Label)
 		})
-		if global.IsMaster {
+		if global.IsMaster && global.CoreDB != nil {
 			var copiesSetting model.Setting
 			_ = global.CoreDB.Where("key = ?", "UpgradeBackupCopies").First(&copiesSetting).Error
 			copies, _ := strconv.Atoi(copiesSetting.Value)
@@ -1084,18 +1084,10 @@ func dropTaskLog(logDir string) {
 		_ = global.DB.Model(&model.BackupRecord{}).Where("task_id != ?", "").Select("task_id").Find(&usedTasks).Error
 	case "Clam":
 		_ = global.DB.Model(&model.ClamRecord{}).Where("task_id != ?", "").Select("task_id").Find(&usedTasks).Error
-	case "Tamper":
-		xpackDB, err := common.LoadDBConnByPathWithErr(path.Join(global.CONF.Base.InstallDir, "1panel/db/xpack.db"), "xpack.db")
-		if err == nil {
-			_ = xpackDB.Table("tampers").Where("task_id != ?", "").Select("task_id").Find(&usedTasks).Error
+	case "Tamper", "System":
+		if global.TaskDB != nil {
+			_ = global.TaskDB.Model(&model.Task{}).Where("type = ? AND status = ?", taskType, constant.StatusExecuting).Pluck("id", &usedTasks).Error
 		}
-		defer common.CloseDB(xpackDB)
-	case "System":
-		xpackDB, err := common.LoadDBConnByPathWithErr(path.Join(global.CONF.Base.InstallDir, "1panel/db/xpack.db"), "xpack.db")
-		if err == nil {
-			_ = xpackDB.Model("nodes").Where("task_id != ?", "").Select("task_id").Find(&usedTasks).Error
-		}
-		defer common.CloseDB(xpackDB)
 	default:
 		dropFileOrDir(logDir)
 		_ = taskRepo.Delete(repo.WithByType(taskType))

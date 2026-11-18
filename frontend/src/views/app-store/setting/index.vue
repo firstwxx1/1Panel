@@ -62,13 +62,7 @@
                                 @change="updateConfig('InstallAllowPort', config.installAllowPort)"
                             />
                         </el-form-item>
-                        <CustomSetting v-if="isXpackOrEE" />
-                        <span class="input-help logText" v-else>
-                            {{ $t('xpack.customApp.licenseHelper') }}
-                            <el-link class="link" @click="toUpload" type="primary">
-                                {{ $t('license.levelUpPro') }}
-                            </el-link>
-                        </span>
+                        <CustomSetting v-if="customAppAvailable && isXpackOrEE" />
                     </el-col>
                 </el-row>
             </el-form>
@@ -88,7 +82,11 @@ import { loadOptionalComponent } from '@/extensions/optional';
 import { useGlobalStore } from '@/composables/useGlobalStore';
 const { isXpackOrEE } = useGlobalStore();
 
-const CustomSetting = defineAsyncComponent(() => loadOptionalComponent('/src/xpack/views/appstore/index.vue'));
+const customAppModules = import.meta.glob('/src/xpack/views/appstore/index.vue');
+const customAppAvailable = Object.keys(customAppModules).length > 0;
+const CustomSetting = customAppAvailable
+    ? defineAsyncComponent(() => loadOptionalComponent('/src/xpack/views/appstore/index.vue'))
+    : null;
 
 const rules = ref<FormRules>({});
 const config = ref({
@@ -126,13 +124,15 @@ const toUpload = () => {
 };
 
 const getNodeConfig = async () => {
-    if (isXpackOrEE.value) {
+    if (!customAppAvailable || isXpackOrEE.value) {
         return;
     }
-    const res = await getCurrentNodeCustomAppConfig();
-    if (res && res.data) {
-        useCustomApp.value = res.data.status === 'enable';
-    }
+    try {
+        const res = await getCurrentNodeCustomAppConfig();
+        if (res && res.data) {
+            useCustomApp.value = res.data.status === 'enable';
+        }
+    } catch {}
 };
 
 const updateConfig = async (scope: string, value: string) => {

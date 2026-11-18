@@ -200,14 +200,14 @@ func baseTask(baseAlert []dto.AlertDTO) {
 			if global.CONF.Base.IsEnterprise {
 				continue
 			}
-			if global.IsMaster {
+			if global.IsMaster && global.CoreDB != nil {
 				loadPanelPwd(alert)
 			}
 		case "panelUpdate":
 			if global.CONF.Base.IsEnterprise {
 				continue
 			}
-			if global.IsMaster {
+			if global.IsMaster && global.CoreDB != nil {
 				loadPanelUpdate(alert)
 			}
 		}
@@ -231,18 +231,20 @@ func resourceTask(resourceAlert []dto.AlertDTO) {
 		case "disk":
 			loadDiskUsage(alert)
 		case "panelLogin":
-			loadPanelLogin(alert)
+			if global.IsMaster && global.CoreDB != nil {
+				loadPanelLogin(alert)
+			}
 		case "sshLogin":
 			loadSSHLogin(alert)
 		case "nodeException":
-			if execute && global.IsMaster {
+			if execute && global.IsMaster && global.CoreDB != nil {
 				loadNodeException(alert)
 			}
 		case "licenseException":
 			if global.CONF.Base.IsEnterprise {
 				continue
 			}
-			if execute && global.IsMaster {
+			if execute && global.IsMaster && global.CoreDB != nil {
 				loadLicenseException(alert)
 			}
 		}
@@ -912,6 +914,9 @@ func calculateWebsiteExpiryDays(websites []model.Website, cycle uint) (map[int][
 }
 
 func getSettingValue(key string) (string, error) {
+	if global.CoreDB == nil {
+		return "", errors.New("core database is unavailable")
+	}
 	var setting model.Setting
 	if err := global.CoreDB.Model(&model.Setting{}).Where("key = ?", key).First(&setting).Error; err != nil {
 		global.LOG.Errorf("load %s from db setting failed: %v", key, err)

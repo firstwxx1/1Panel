@@ -21,7 +21,7 @@ func NewIScriptRepo() IScriptRepo {
 func (u *ScriptRepo) Get(opts ...DBOption) (model.ScriptLibrary, error) {
 	var script model.ScriptLibrary
 	db := global.DB
-	if global.IsMaster {
+	if global.IsMaster && global.CoreDB != nil {
 		db = global.CoreDB
 	}
 	for _, opt := range opts {
@@ -33,7 +33,7 @@ func (u *ScriptRepo) Get(opts ...DBOption) (model.ScriptLibrary, error) {
 
 func (u *ScriptRepo) List(opts ...DBOption) ([]model.ScriptLibrary, error) {
 	var ops []model.ScriptLibrary
-	if global.IsMaster {
+	if global.IsMaster && global.CoreDB != nil {
 		db := global.CoreDB.Model(&model.ScriptLibrary{})
 		for _, opt := range opts {
 			db = opt(db)

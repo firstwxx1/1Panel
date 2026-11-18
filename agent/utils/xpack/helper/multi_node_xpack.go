@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strconv"
@@ -20,13 +21,14 @@ import (
 
 	"github.com/1Panel-dev/1Panel/agent/app/dto"
 	"github.com/1Panel-dev/1Panel/agent/app/model"
-	"github.com/1Panel-dev/1Panel/agent/buserr"
 	"github.com/1Panel-dev/1Panel/agent/global"
 	"github.com/1Panel-dev/1Panel/agent/utils/common"
 	"github.com/1Panel-dev/1Panel/agent/utils/encrypt"
 	"github.com/1Panel-dev/1Panel/agent/utils/xpack/providers"
+	"github.com/1Panel-dev/1Panel/agent/xpack/monitor"
 	"github.com/1Panel-dev/1Panel/agent/xpack/tamper"
 	"github.com/gin-gonic/gin"
+	"github.com/robfig/cron/v3"
 )
 
 // NodeConfigPath marks an agent as a managed child node. It is written by the
@@ -35,6 +37,9 @@ const NodeConfigPath = "/etc/1panel/node.json"
 
 // RemoveTamperHook allows the tamper subsystem to register an in-memory cleanup callback.
 var RemoveTamperHook func(website string)
+
+// StartClamJobHook allows the server package to bind ClamService.HandleOnce without a cyclic import.
+var StartClamJobHook func(clamID uint)
 
 type nodeConfig struct {
 	Name    string `json:"name"`
@@ -67,12 +72,15 @@ func (m *multiNodeHelper) RemoveTamper(website string) {
 	if website == "" || website == "." || website == ".." || strings.ContainsAny(website, "/\\") {
 		return
 	}
+	if ms, err := monitor.DefaultStore(); err == nil && ms != nil {
+		_ = ms.RemoveSite(website)
+	}
 	if RemoveTamperHook != nil {
 		RemoveTamperHook(website)
 		return
 	}
 	if s, err := tamper.DefaultStore(); err == nil && s != nil {
-		s.RemoveSite(website)
+		_ = s.RemoveSite(website)
 		return
 	}
 	if global.Dir.DataDir == "" {
@@ -85,7 +93,34 @@ func (m *multiNodeHelper) RemoveTamper(website string) {
 }
 
 func (m *multiNodeHelper) StartClam(startClam *model.Clam, isUpdate bool) (int, error) {
-	return 0, buserr.New("ErrXpackNotFound")
+	if startClam == nil {
+		return 0, errors.New("clam config is nil")
+	}
+	spec := strings.TrimSpace(startClam.Spec)
+	if spec == "" {
+		return 0, errors.New("clam cron spec is empty")
+	}
+	if global.Cron == nil {
+		return 0, errors.New("cron scheduler is not initialized")
+	}
+	if isUpdate && startClam.EntryID != 0 {
+		global.Cron.Remove(cron.EntryID(startClam.EntryID))
+	}
+	clamID := startClam.ID
+	clamName := startClam.Name
+	entryID, err := global.Cron.AddFunc(spec, func() {
+		id := clamID
+		if id == 0 && clamName != "" && global.DB != nil {
+			var found model.Clam
+			if global.DB.Where("name = ?", clamName).First(&found).Error == nil {
+				id = found.ID
+			}
+		}
+		if id > 0 && StartClamJobHook != nil {
+			StartClamJobHook(id)
+		}
+	})
+	return int(entryID), err
 }
 
 func (m *multiNodeHelper) LoadNodeInfo(isBase bool) (model.NodeInfo, error) {
@@ -119,8 +154,57 @@ func (m *multiNodeHelper) IsUseCustomApp() bool { return false }
 
 func (m *multiNodeHelper) IsXpack() bool { return true }
 
+func loadSystemProxyFunc() func(*http.Request) (*url.URL, error) {
+	if global.DB == nil {
+		return http.ProxyFromEnvironment
+	}
+	var rows []model.Setting
+	if err := global.DB.Model(&model.Setting{}).
+		Where("`key` IN ?", []string{"ProxyType", "ProxyUrl", "ProxyPort", "ProxyUser", "ProxyPasswd"}).
+		Find(&rows).Error; err != nil {
+		return http.ProxyFromEnvironment
+	}
+	kv := make(map[string]string, len(rows))
+	for _, r := range rows {
+		kv[r.Key] = r.Value
+	}
+	proxyType := strings.ToLower(strings.TrimSpace(kv["ProxyType"]))
+	proxyURLRaw := strings.TrimSpace(kv["ProxyUrl"])
+	if (proxyType != "http" && proxyType != "https" && proxyType != "socks5") || proxyURLRaw == "" {
+		return http.ProxyFromEnvironment
+	}
+	raw := proxyURLRaw
+	lower := strings.ToLower(raw)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") && !strings.HasPrefix(lower, "socks5://") {
+		if ip := net.ParseIP(raw); ip != nil && ip.To4() == nil {
+			raw = "[" + raw + "]"
+		}
+		raw = proxyType + "://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return http.ProxyFromEnvironment
+	}
+	if port := strings.TrimSpace(kv["ProxyPort"]); port != "" && u.Port() == "" {
+		u.Host = net.JoinHostPort(u.Hostname(), port)
+	}
+	if proxyUser := strings.TrimSpace(kv["ProxyUser"]); proxyUser != "" {
+		decryptedPass := ""
+		if kv["ProxyPasswd"] != "" {
+			if plain, decErr := encrypt.StringDecrypt(kv["ProxyPasswd"]); decErr == nil {
+				decryptedPass = plain
+			} else {
+				decryptedPass = kv["ProxyPasswd"]
+			}
+		}
+		u.User = url.UserPassword(proxyUser, decryptedPass)
+	}
+	return http.ProxyURL(u)
+}
+
 func (m *multiNodeHelper) LoadRequestTransport() *http.Transport {
 	return &http.Transport{
+		Proxy:           loadSystemProxyFunc(),
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		DialContext: (&net.Dialer{
 			Timeout:   60 * time.Second,

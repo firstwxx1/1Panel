@@ -7,7 +7,9 @@
             @deploy="(modelDir) => createRef.open('vllm', modelDir)"
         />
         <LayoutContent v-else-if="isFiles">
-            <template #main><el-empty :description="$t('license.levelUpPro')" /></template>
+            <template #main>
+                <el-empty :description="isProductPro ? $t('commons.msg.noneData') : $t('license.levelUpPro')" />
+            </template>
         </LayoutContent>
         <LocalView v-else-if="isManagement" />
         <template v-else>
@@ -353,15 +355,16 @@ const isLocal = pagePath === '/ai/model/local';
 const isManagement = computed(
     () => isCurrentPage.value && isLocal && ['vllm', 'tensorrt'].includes(String(route.query.tab)),
 );
-const tabs = computed(() => [
-    { label: i18n.global.t('aiTools.model.services'), path: '/ai/model/account' },
-    { label: i18n.global.t('aiTools.model.files'), path: '/ai/model/files' },
-    { label: i18n.global.t('aiTools.model.engines'), path: '/ai/model/local' },
-]);
 const downloaderModules = import.meta.glob('/src/xpack/views/model-downloader/index.vue');
-const downloaderView = Object.keys(downloaderModules).length
+const downloaderAvailable = Object.keys(downloaderModules).length > 0;
+const downloaderView = downloaderAvailable
     ? defineAsyncComponent(() => loadOptionalComponent('/src/xpack/views/model-downloader/index.vue'))
     : null;
+const tabs = computed(() => [
+    { label: i18n.global.t('aiTools.model.services'), path: '/ai/model/account' },
+    ...(downloaderAvailable ? [{ label: i18n.global.t('aiTools.model.files'), path: '/ai/model/files' }] : []),
+    { label: i18n.global.t('aiTools.model.engines'), path: '/ai/model/local' },
+]);
 const createRef = ref();
 const manageRef = ref();
 const upgradeRef = ref();

@@ -21,18 +21,6 @@
                             <el-form-item :label="$t('xpack.alert.sendTimeRange')" prop="sendTimeRange">
                                 {{ sendTimeRange }}
                             </el-form-item>
-                            <div v-if="!isMaster">
-                                <el-form-item :label="$t('xpack.alert.offline')" prop="isOffline">
-                                    <el-switch
-                                        v-permission
-                                        @change="onChangeOffline"
-                                        v-model="commonConfig.config.isOffline"
-                                        active-value="Enable"
-                                        inactive-value="Disable"
-                                    ></el-switch>
-                                    <span class="input-help">{{ $t('xpack.alert.offlineHelper') }}</span>
-                                </el-form-item>
-                            </div>
                         </el-col>
                     </el-row>
                 </el-form>
@@ -389,8 +377,12 @@ const searchConfigs = async () => {
         }
         isInitialized.value = true;
 
-        allConfigs.value = pageRes.data?.items || [];
-        paginationConfig.total = pageRes.data?.total || 0;
+        const rawItems = pageRes.data?.items || [];
+        allConfigs.value = rawItems.filter((item) => item.type !== 'sms');
+        paginationConfig.total = Math.max(
+            0,
+            (pageRes.data?.total || 0) - (rawItems.length - allConfigs.value.length),
+        );
     } catch {
         allConfigs.value = [];
         paginationConfig.total = 0;

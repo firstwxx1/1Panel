@@ -220,9 +220,6 @@ const typeOptions = computed(() => {
     }
     options.push({ value: 'bark', label: i18n.global.t('xpack.alert.bark') });
     options.push({ value: 'custom', label: i18n.global.t('xpack.alert.custom') });
-    if (isProductPro.value && !isEE.value && !isIntl.value) {
-        options.push({ value: 'sms', label: i18n.global.t('xpack.alert.sms') });
-    }
     return options;
 });
 

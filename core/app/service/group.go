@@ -111,9 +111,11 @@ func (u *GroupService) Delete(id uint) error {
 		if _, err := proxy_local.NewLocalClient("/api/v2/websites/group/change", http.MethodPost, bytes.NewReader(bodyItem), nil); err != nil {
 			return err
 		}
-		if err := xpack.MultiNodeProvider.UpdateGroup("node", id, defaultGroup.ID); err != nil {
+		if err := xpack.MultiNodeProvider.UpdateGroup("website", id, defaultGroup.ID); err != nil {
 			return err
 		}
+	case "cronjob":
+		err = xpack.MultiNodeProvider.UpdateGroup("cronjob", id, defaultGroup.ID)
 	}
 	if err != nil {
 		return err

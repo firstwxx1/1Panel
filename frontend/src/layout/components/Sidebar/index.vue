@@ -67,6 +67,7 @@ import { MenuStore } from '@/store';
 import { getSettingBaseInfo } from '@/api/modules/setting';
 import PrimaryMenu from '@/assets/images/menu-bg.svg?component';
 import { hasPermissionMetaAccess, hasRouteRoleAccess } from '@/utils/rbac';
+import { reconcileLegacyXpackHideMenu } from '@/utils/xpack';
 import { useGlobalStore } from '@/composables/useGlobalStore';
 import type { Login } from '@/api/interface/auth';
 
@@ -182,6 +183,15 @@ function allowMenuItem(item: RouteRecordRaw) {
 
 function buildMenuListFromSettings(hideMenuValue?: string) {
     const hideMenu = JSON.parse(hideMenuValue || '[]');
+    reconcileLegacyXpackHideMenu(
+        hideMenu,
+        new Set(
+            router
+                .getRoutes()
+                .map((r) => String(r.name || ''))
+                .filter(Boolean),
+        ),
+    );
     const showSet = new Set<string>();
     getCheckedLabels(hideMenu, showSet);
     const rstMenuList: RouteRecordRaw[] = [];
@@ -190,22 +200,6 @@ function buildMenuListFromSettings(hideMenuValue?: string) {
         const menuItem = buildVisibleMenu(menu, showSet);
         if (menuItem) {
             rstMenuList.push(menuItem);
-        }
-    }
-    // self-written Pro entries (WAF / monitor / multi-node) are not part of the saved HideMenu list; always keep them
-    const xpackIdx = (menuList as RouteRecordRaw[]).findIndex((m) => m.name === 'Xpack-Menu');
-    if (xpackIdx >= 0) {
-        const [xpackItem] = buildAuthVisibleMenuList([menuList[xpackIdx]]);
-        const cur = rstMenuList.findIndex((m) => m.name === 'Xpack-Menu');
-        if (xpackItem) {
-            if (cur >= 0) {
-                rstMenuList[cur] = xpackItem;
-            } else {
-                const order = (menuList as RouteRecordRaw[]).map((m) => m.name);
-                let at = rstMenuList.findIndex((m) => order.indexOf(m.name) > xpackIdx);
-                if (at < 0) at = rstMenuList.length;
-                rstMenuList.splice(at, 0, xpackItem);
-            }
         }
     }
     return rstMenuList;

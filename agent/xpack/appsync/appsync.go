@@ -50,6 +50,12 @@ func loadInstall(name string) (*model.AppInstall, error) {
 	return &in, nil
 }
 
+func ensurePanelNetwork() {
+	if exec.Command("docker", "network", "inspect", "1panel-network").Run() != nil {
+		_ = exec.Command("docker", "network", "create", "1panel-network").Run()
+	}
+}
+
 func compose(dir string, args ...string) ([]byte, error) {
 	a := append([]string{"compose", "-f", filepath.Join(dir, "docker-compose.yml")}, args...)
 	return exec.Command("docker", a...).CombinedOutput()
@@ -126,6 +132,7 @@ func importApp(req ImportReq) error {
 		return err
 	}
 	if req.Start {
+		ensurePanelNetwork()
 		if out, err := compose(in.GetPath(), "up", "-d"); err != nil {
 			global.DB.Model(&in).Updates(map[string]interface{}{"status": "Error", "message": string(out)})
 			return fmt.Errorf("start failed: %s", strings.TrimSpace(string(out)))
@@ -190,6 +197,7 @@ func Register(g *gin.RouterGroup) {
 		arg := []string{"stop"}
 		status := "Stopped"
 		if req.Op == "start" {
+			ensurePanelNetwork()
 			arg, status = []string{"up", "-d"}, "Running"
 		}
 		if out, err := compose(in.GetPath(), arg...); err != nil {

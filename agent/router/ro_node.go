@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path"
@@ -21,6 +22,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/1Panel-dev/1Panel/agent/app/api/v2/helper"
@@ -29,14 +31,33 @@ import (
 	"github.com/1Panel-dev/1Panel/agent/app/service"
 	"github.com/1Panel-dev/1Panel/agent/constant"
 	"github.com/1Panel-dev/1Panel/agent/global"
+	"github.com/1Panel-dev/1Panel/agent/i18n"
 	"github.com/1Panel-dev/1Panel/agent/utils/cmd"
 	"github.com/1Panel-dev/1Panel/agent/utils/encrypt"
+	"github.com/1Panel-dev/1Panel/agent/utils/terminal"
 	"github.com/1Panel-dev/1Panel/agent/xpack/appsync"
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 )
 
 // NodeRouter holds the endpoints a master uses to manage a child node's agent.
 type NodeRouter struct{}
+
+type stagedScript struct {
+	script    string
+	expiresAt time.Time
+}
+
+var (
+	stagedScriptsMu sync.Mutex
+	stagedScripts   = make(map[string]stagedScript)
+)
+
+func randHexToken(byteLen int) string {
+	b := make([]byte, byteLen)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
 
 func currentNodeVersion() string {
 	ver := strings.TrimSpace(global.CONF.Base.Version)
@@ -211,7 +232,11 @@ func (a *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 			helper.InternalServer(c, err)
 			return
 		}
-		if ver := strings.TrimSpace(c.GetHeader("X-Version")); ver != "" {
+		ver := strings.TrimSpace(c.Query("version"))
+		if ver == "" {
+			ver = strings.TrimSpace(c.GetHeader("X-Version"))
+		}
+		if ver != "" {
 			if b, err := os.ReadFile("/etc/1panel/node.json"); err == nil {
 				var cfg map[string]interface{}
 				if json.Unmarshal(b, &cfg) == nil && cfg != nil {
@@ -297,11 +322,30 @@ func (a *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 		var req struct {
 			BackupAccounts *[]model.BackupAccount `json:"backupAccounts"`
 			Scripts        *[]model.ScriptLibrary `json:"scripts"`
+			Language       *string                `json:"language"`
+			Edition        *string                `json:"edition"`
+			SystemProxy    *struct {
+				Type              string `json:"type"`
+				URL               string `json:"url"`
+				Port              string `json:"port"`
+				User              string `json:"user"`
+				Passwd            string `json:"passwd"`
+				PasswdKeep        string `json:"passwdKeep"`
+				ProxyDocker       string `json:"proxyDocker"`
+				DockerProxyURL    string `json:"dockerProxyUrl"`
+				WithDockerRestart bool   `json:"withDockerRestart"`
+			} `json:"systemProxy"`
+			GroupUpdate *struct {
+				Type  string `json:"type"`
+				OldID uint   `json:"oldId"`
+				NewID uint   `json:"newId"`
+			} `json:"groupUpdate"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			helper.BadRequest(c, err)
 			return
 		}
+		settingRepo := repo.NewISettingRepo()
 		if req.BackupAccounts != nil {
 			items := make([]model.BackupAccount, 0, len(*req.BackupAccounts))
 			for _, item := range *req.BackupAccounts {
@@ -329,7 +373,188 @@ func (a *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 				return
 			}
 		}
+		if req.Language != nil {
+			lang := strings.TrimSpace(*req.Language)
+			if err := settingRepo.UpdateOrCreate("Language", lang); err != nil {
+				helper.InternalServer(c, err)
+				return
+			}
+			i18n.SetLanguage(lang)
+		}
+		if req.Edition != nil {
+			edition := strings.TrimSpace(*req.Edition)
+			if err := settingRepo.UpdateOrCreate("Edition", edition); err != nil {
+				helper.InternalServer(c, err)
+				return
+			}
+			global.CONF.Base.Edition = edition
+		}
+		if req.SystemProxy != nil {
+			p := req.SystemProxy
+			encPasswd := ""
+			if p.Passwd != "" {
+				var err error
+				encPasswd, err = encrypt.StringEncrypt(p.Passwd)
+				if err != nil {
+					helper.InternalServer(c, err)
+					return
+				}
+			}
+			for _, kv := range [][2]string{
+				{"ProxyType", p.Type},
+				{"ProxyUrl", p.URL},
+				{"ProxyPort", p.Port},
+				{"ProxyUser", p.User},
+				{"ProxyPasswd", encPasswd},
+				{"ProxyPasswdKeep", p.PasswdKeep},
+			} {
+				if err := settingRepo.UpdateOrCreate(kv[0], kv[1]); err != nil {
+					helper.InternalServer(c, err)
+					return
+				}
+			}
+			if _, err := os.Stat("/etc/systemd/system"); err == nil {
+				const dockerProxyConf = "/etc/systemd/system/docker.service.d/http-proxy.conf"
+				if p.ProxyDocker == "Enable" && strings.TrimSpace(p.DockerProxyURL) != "" {
+					u := strings.ReplaceAll(strings.TrimSpace(p.DockerProxyURL), `"`, `\"`)
+					if err := os.MkdirAll(filepath.Dir(dockerProxyConf), 0o755); err == nil {
+						content := fmt.Sprintf("[Service]\nEnvironment=\"HTTP_PROXY=%s\"\nEnvironment=\"HTTPS_PROXY=%s\"\nEnvironment=\"NO_PROXY=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16\"\n", u, u)
+						_ = os.WriteFile(dockerProxyConf, []byte(content), 0o644)
+						_ = exec.Command("systemctl", "daemon-reload").Run()
+					}
+				} else if p.ProxyDocker == "Disable" {
+					if _, err := os.Stat(dockerProxyConf); err == nil {
+						_ = os.Remove(dockerProxyConf)
+					}
+					_ = exec.Command("systemctl", "daemon-reload").Run()
+				}
+				if p.WithDockerRestart {
+					_ = exec.Command("systemctl", "restart", "docker").Run()
+				}
+			}
+		}
+		if req.GroupUpdate != nil && global.DB != nil {
+			switch req.GroupUpdate.Type {
+			case "website":
+				if err := global.DB.Model(&model.Website{}).Where("website_group_id = ?", req.GroupUpdate.OldID).Update("website_group_id", req.GroupUpdate.NewID).Error; err != nil {
+					helper.InternalServer(c, err)
+					return
+				}
+			case "cronjob":
+				if err := global.DB.Model(&model.Cronjob{}).Where("group_id = ?", req.GroupUpdate.OldID).Update("group_id", req.GroupUpdate.NewID).Error; err != nil {
+					helper.InternalServer(c, err)
+					return
+				}
+			case "host":
+				if err := global.DB.Model(&model.Host{}).Where("group_id = ?", req.GroupUpdate.OldID).Update("group_id", req.GroupUpdate.NewID).Error; err != nil {
+					helper.InternalServer(c, err)
+					return
+				}
+			}
+		}
 		helper.Success(c)
+	})
+
+	g.POST("/script-stage", func(c *gin.Context) {
+		var req struct {
+			Script string `json:"script"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			helper.BadRequest(c, err)
+			return
+		}
+		if strings.TrimSpace(req.Script) == "" {
+			helper.BadRequest(c, errors.New("script is required"))
+			return
+		}
+		tok := randHexToken(16)
+		now := time.Now()
+		stagedScriptsMu.Lock()
+		for k, v := range stagedScripts {
+			if now.After(v.expiresAt) {
+				delete(stagedScripts, k)
+			}
+		}
+		stagedScripts[tok] = stagedScript{
+			script:    req.Script,
+			expiresAt: now.Add(60 * time.Second),
+		}
+		stagedScriptsMu.Unlock()
+		helper.SuccessWithData(c, gin.H{"token": tok})
+	})
+
+	g.GET("/script-run", func(c *gin.Context) {
+		tok := strings.TrimSpace(c.Query("token"))
+		now := time.Now()
+		stagedScriptsMu.Lock()
+		for k, v := range stagedScripts {
+			if now.After(v.expiresAt) {
+				delete(stagedScripts, k)
+			}
+		}
+		item, ok := stagedScripts[tok]
+		if ok {
+			delete(stagedScripts, tok)
+		}
+		stagedScriptsMu.Unlock()
+		if tok == "" || !ok || now.After(item.expiresAt) {
+			helper.BadRequest(c, errors.New("invalid or expired script token"))
+			return
+		}
+		cols, err := strconv.Atoi(c.DefaultQuery("cols", "80"))
+		if err != nil || cols <= 0 {
+			cols = 80
+		}
+		rows, err := strconv.Atoi(c.DefaultQuery("rows", "40"))
+		if err != nil || rows <= 0 {
+			rows = 40
+		}
+		wsUpgrader := websocket.Upgrader{
+			ReadBufferSize:  4096,
+			WriteBufferSize: 16384,
+			CheckOrigin:     func(*http.Request) bool { return true },
+		}
+		wsConn, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)
+		if err != nil {
+			return
+		}
+		defer wsConn.Close()
+
+		writeWsCloseErr := func(err error) {
+			reason := err.Error()
+			if len(reason) > 120 {
+				reason = reason[:120]
+			}
+			_ = wsConn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, reason), time.Now().Add(time.Second))
+		}
+
+		tmpPath := "/tmp/1panel-script-" + randHexToken(8) + ".sh"
+		if err := os.WriteFile(tmpPath, []byte(item.script), 0o700); err != nil {
+			writeWsCloseErr(err)
+			return
+		}
+		defer os.Remove(tmpPath)
+
+		slave, err := terminal.NewCommand("bash")
+		if err != nil {
+			writeWsCloseErr(err)
+			return
+		}
+		defer slave.Close()
+
+		tty, err := terminal.NewLocalWsSession(cols, rows, wsConn, slave, true)
+		if err != nil {
+			writeWsCloseErr(err)
+			return
+		}
+
+		quitChan := make(chan bool, 3)
+		tty.Start(quitChan)
+		go slave.Wait(quitChan)
+		time.Sleep(100 * time.Millisecond)
+		_, _ = slave.Write([]byte("bash " + tmpPath + "\n"))
+		<-quitChan
+		_ = wsConn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	})
 
 	g.POST("/check-backup-used", func(c *gin.Context) {

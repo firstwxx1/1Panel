@@ -76,6 +76,7 @@
 
 <script setup lang="ts">
 import { reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { AllowDropType, ElMessageBox, RenderContentContext } from 'element-plus';
 import i18n from '@/lang';
 import { defaultMenu, updateMenu, updateSetting } from '@/api/modules/setting';
@@ -83,6 +84,8 @@ import { MsgSuccess } from '@/utils/message';
 import { useGlobalStore } from '@/composables/useGlobalStore';
 import { ArrowRight } from '@element-plus/icons-vue';
 import { sortMenu } from '@/utils/misc';
+import { reconcileLegacyXpackHideMenu } from '@/utils/xpack';
+const router = useRouter();
 const { menuAccordion } = useGlobalStore();
 
 const drawerVisible = ref();
@@ -100,7 +103,16 @@ const form = reactive({
 const acceptParams = (params: DialogProps): void => {
     drawerVisible.value = true;
     form.menuAccordion = params.menuAccordion || 'Disable';
-    let hideMenu = JSON.parse(params.hideMenu);
+    let hideMenu = JSON.parse(params.hideMenu || '[]');
+    reconcileLegacyXpackHideMenu(
+        hideMenu,
+        new Set(
+            router
+                .getRoutes()
+                .map((r) => String(r.name || ''))
+                .filter(Boolean),
+        ),
+    );
     sortMenu(hideMenu);
     treeData.hideMenu = hideMenu;
 };

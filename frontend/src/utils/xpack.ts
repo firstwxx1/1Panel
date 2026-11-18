@@ -201,3 +201,150 @@ export async function getXpackSettingForTheme() {
 export async function updateXpackSettingByKey(key: string, value: string) {
     return updateXpackSettingByKeyFromExtension(key, value);
 }
+
+interface CanonicalProMenuEntry {
+    id: string;
+    label: string;
+    path: string;
+    title: string;
+}
+
+const PRO_HIDE_MENU_ITEMS: CanonicalProMenuEntry[] = [
+    { id: '112', label: 'ProWaf', path: '/xpack/waf', title: 'pro.waf.title' },
+    { id: '113', label: 'ProMonitor', path: '/xpack/monitor', title: 'pro.monitor.title' },
+    { id: '115', label: 'ProSync', path: '/xpack/sync', title: 'pro.sync.title' },
+    { id: '114', label: 'ProTamper', path: '/xpack/tamper', title: 'pro.tamper.title' },
+    { id: '116', label: 'ProAlert', path: '/xpack/alert', title: 'pro.alert.title' },
+    { id: '117', label: 'ProUiSetting', path: '/xpack/uisetting', title: 'pro.uisetting.title' },
+    { id: '111', label: 'NodeDashboard', path: '/xpack/node', title: 'pro.node.title' },
+];
+
+const PRO_MENU_BY_LABEL = new Map<string, CanonicalProMenuEntry>(
+    PRO_HIDE_MENU_ITEMS.map((item) => [item.label, item]),
+);
+
+const LEGACY_XPACK_HIDE_MENU_MAP: Record<string, CanonicalProMenuEntry> = {
+    Dashboard: PRO_MENU_BY_LABEL.get('ProWaf')!,
+    MonitorDashboard: PRO_MENU_BY_LABEL.get('ProMonitor')!,
+    Sync: PRO_MENU_BY_LABEL.get('ProSync')!,
+    Tamper: PRO_MENU_BY_LABEL.get('ProTamper')!,
+    XSetting: PRO_MENU_BY_LABEL.get('ProUiSetting')!,
+    NodeDashboard: PRO_MENU_BY_LABEL.get('NodeDashboard')!,
+};
+
+const RETIRED_XPACK_HIDE_MENU_LABELS = new Set([
+    'XApp',
+    'VirtualMachine',
+    'Cluster',
+    'Upage',
+    'UserManagement',
+    'OpsReport',
+]);
+
+export function reconcileLegacyXpackHideMenu(hideMenu: any[], registeredRouteNames?: Set<string>): any[] {
+    if (!Array.isArray(hideMenu)) {
+        return [];
+    }
+
+    const seenLabels = new Set<string>();
+
+    const normalizeList = (nodes: any[]) => {
+        const cleaned: any[] = [];
+        for (const node of nodes) {
+            if (!node || typeof node !== 'object') {
+                continue;
+            }
+
+            const mapped = LEGACY_XPACK_HIDE_MENU_MAP[node.label] || PRO_MENU_BY_LABEL.get(node.label);
+            if (mapped) {
+                node.id = mapped.id;
+                node.label = mapped.label;
+                node.path = mapped.path;
+                node.title = mapped.title;
+            } else if (node.label === 'Xpack-Menu') {
+                node.title = 'pro.menu';
+            }
+
+            if (RETIRED_XPACK_HIDE_MENU_LABELS.has(node.label)) {
+                continue;
+            }
+
+            if (Array.isArray(node.children) && node.children.length > 0) {
+                normalizeList(node.children);
+                if (
+                    node.label !== 'Xpack-Menu' &&
+                    node.children.length === 0 &&
+                    registeredRouteNames &&
+                    node.label &&
+                    !registeredRouteNames.has(node.label)
+                ) {
+                    continue;
+                }
+            } else if (
+                node.label !== 'Xpack-Menu' &&
+                registeredRouteNames &&
+                node.label &&
+                !registeredRouteNames.has(node.label)
+            ) {
+                continue;
+            }
+
+            if (node.label) {
+                if (seenLabels.has(node.label)) {
+                    continue;
+                }
+                seenLabels.add(node.label);
+            }
+
+            cleaned.push(node);
+        }
+        nodes.splice(0, nodes.length, ...cleaned);
+    };
+
+    normalizeList(hideMenu);
+
+    const missingProItems = PRO_HIDE_MENU_ITEMS.filter((item) => !seenLabels.has(item.label));
+    let xpackMenuNode = hideMenu.find((item) => item.label === 'Xpack-Menu');
+
+    if (missingProItems.length > 0) {
+        if (!xpackMenuNode) {
+            xpackMenuNode = {
+                id: '11',
+                disabled: false,
+                title: 'pro.menu',
+                isShow: true,
+                label: 'Xpack-Menu',
+                path: '/xpack',
+                sort: 350,
+                children: [],
+            };
+            hideMenu.push(xpackMenuNode);
+        }
+        if (!Array.isArray(xpackMenuNode.children)) {
+            xpackMenuNode.children = [];
+        }
+        let maxSort = xpackMenuNode.children.reduce(
+            (acc: number, child: any) => Math.max(acc, Number(child?.sort) || 0),
+            0,
+        );
+        const defaultShow = xpackMenuNode.isShow ?? true;
+        for (const item of missingProItems) {
+            maxSort += 100;
+            xpackMenuNode.children.push({
+                id: item.id,
+                title: item.title,
+                path: item.path,
+                label: item.label,
+                isShow: defaultShow,
+                sort: maxSort,
+            });
+        }
+    } else if (xpackMenuNode && (!Array.isArray(xpackMenuNode.children) || xpackMenuNode.children.length === 0)) {
+        const idx = hideMenu.indexOf(xpackMenuNode);
+        if (idx >= 0) {
+            hideMenu.splice(idx, 1);
+        }
+    }
+
+    return hideMenu;
+}

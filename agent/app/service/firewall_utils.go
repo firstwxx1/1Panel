@@ -72,7 +72,7 @@ type firewallRuleBatchItem struct {
 }
 
 func LoadPanelPort() string {
-	if !global.IsMaster {
+	if !global.IsMaster || global.CoreDB == nil {
 		return global.CONF.Base.Port
 	}
 	var portSetting model.Setting

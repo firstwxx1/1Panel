@@ -2,6 +2,7 @@ package router
 
 import (
 	v2 "github.com/1Panel-dev/1Panel/agent/app/api/v2"
+	"github.com/1Panel-dev/1Panel/agent/app/api/v2/helper"
 	"github.com/gin-gonic/gin"
 )
 
@@ -47,4 +48,11 @@ func (a *AppRouter) InitRouter(Router *gin.RouterGroup) {
 		appRouter.GET("/ignored/detail", baseApi.ListAppIgnored)
 		appRouter.POST("/ignored/cancel", baseApi.CancelIgnoreAppUpgrade)
 	}
+
+	Router.GET("/custom/app/config", func(c *gin.Context) {
+		helper.SuccessWithData(c, gin.H{"status": "Disable"})
+	})
+	Router.POST("/custom/app/sync", func(c *gin.Context) {
+		helper.Success(c)
+	})
 }

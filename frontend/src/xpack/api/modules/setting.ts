@@ -2,6 +2,8 @@ import http from '@/api';
 
 export const searchXSetting = () => http.get<any>('/core/xpack/settings/search');
 
+export const getXProxyDocker = () => http.get<any>('/core/xpack/settings/proxy');
+
 export const updateXSettingByKey = (key: string, value: string) =>
     http.post('/core/xpack/settings/update', { key, value });
 

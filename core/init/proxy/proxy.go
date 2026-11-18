@@ -38,6 +38,7 @@ func Init() {
 
 func newLocalAgentProxy(transport http.RoundTripper) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
+		FlushInterval: -1,
 		Rewrite: func(proxyReq *httputil.ProxyRequest) {
 			if proxyReq.In.Form == nil {
 				proxyReq.Out.URL.RawQuery = proxyReq.In.URL.RawQuery

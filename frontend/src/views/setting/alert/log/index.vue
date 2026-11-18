@@ -4,7 +4,7 @@
             <template #toolbar>
                 <div class="flex justify-between gap-2 flex-wrap sm:flex-row">
                     <div class="flex flex-wrap gap-3">
-                        <el-button v-permission type="primary" @click="syncAll" v-if="isProductPro && !isIntl">
+                        <el-button v-permission type="primary" @click="syncAll" v-if="hasCloudSmsGateway">
                             {{ $t('commons.button.sync') }}
                         </el-button>
                         <el-button v-permission type="primary" plain @click="onClean">
@@ -67,7 +67,7 @@
                         </template>
                     </el-table-column>
                     <fu-table-operations
-                        v-if="isProductPro && !isIntl"
+                        v-if="hasCloudSmsGateway"
                         :ellipsis="2"
                         width="130px"
                         :buttons="buttons"
@@ -104,6 +104,7 @@ import { getAlertConfigDisplayName } from '@/views/setting/alert/setting/drawer/
 import { cronjobAlertTypes, getCronjobAlertResult } from '@/utils/cronjob-alert';
 
 const { isMobile, isProductPro, isIntl, isMaster } = useGlobalStore();
+const hasCloudSmsGateway = false;
 const { t } = i18n.global;
 const loading = ref(false);
 const data = ref();
@@ -361,9 +362,12 @@ const searchAlertInfo = async () => {
         loading.value = true;
         try {
             const res = await ListAlertConfigs();
-            const commonFound = res.data.find((s: any) => s.type === 'common');
-            const config: Alert.CommonConfig = JSON.parse(commonFound.config);
-            isOffline.value = config.isOffline;
+            const commonFound = res.data?.find((s: any) => s.type === 'common');
+            if (commonFound?.config) {
+                const config: Alert.CommonConfig = JSON.parse(commonFound.config);
+                isOffline.value = config.isOffline;
+            }
+        } catch {
         } finally {
             loading.value = false;
         }
@@ -373,8 +377,10 @@ const searchAlertInfo = async () => {
 onMounted(async () => {
     await loadConfigMap();
     await searchAlertInfo();
-    if (isProductPro.value && !isIntl.value) {
-        await syncAllAlert();
+    if (hasCloudSmsGateway && isProductPro.value && !isIntl.value) {
+        try {
+            await syncAllAlert();
+        } catch {}
     }
     await search();
 });

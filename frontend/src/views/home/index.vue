@@ -382,7 +382,12 @@
                                 <el-tooltip :content="$t('xpack.node.panelItem')" placement="top">
                                     <el-button
                                         class="h-button-setting"
-                                        @click="routerToNameWithQuery('SimpleNode', { uncached: 'true' })"
+                                        @click="
+                                            routerToNameWithQuery('NodeDashboard', {
+                                                tab: 'panelManage',
+                                                uncached: 'true',
+                                            })
+                                        "
                                         link
                                         icon="Setting"
                                     />

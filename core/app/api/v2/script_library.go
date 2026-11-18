@@ -149,6 +149,50 @@ func (b *BaseApi) RunScript(c *gin.Context) {
 		helper.Success(c)
 		return
 	}
+	if !global.CONF.Base.IsDemo {
+		currentNode := strings.TrimSpace(c.Query("operateNode"))
+		if currentNode == "" || currentNode == "undefined" {
+			currentNode = "local"
+		}
+		if currentNode != "local" {
+			_, colsErr := strconv.Atoi(c.DefaultQuery("cols", "80"))
+			_, rowsErr := strconv.Atoi(c.DefaultQuery("rows", "40"))
+			var preErr error
+			if colsErr != nil {
+				preErr = errors.WithMessage(colsErr, "invalid param cols in request")
+			} else if rowsErr != nil {
+				preErr = errors.WithMessage(rowsErr, "invalid param rows in request")
+			} else {
+				scriptID := c.Query("script_id")
+				intNum, _ := strconv.Atoi(scriptID)
+				if intNum == 0 {
+					preErr = fmt.Errorf("   no such script %v in library, please check and try again!", scriptID)
+				} else {
+					scriptItem, err := service.LoadScriptInfo(uint(intNum))
+					if err != nil {
+						preErr = err
+					} else {
+						if err := xpack.MultiNodeProvider.ProxyScriptRun(c, currentNode, scriptItem.Script); err == nil {
+							return
+						} else {
+							preErr = err
+						}
+					}
+				}
+			}
+			if c.Writer.Written() {
+				return
+			}
+			wsConn, upErr := upGrader.Upgrade(c.Writer, c.Request, nil)
+			if upErr != nil {
+				global.LOG.Errorf("gin context http handler failed, err: %v", upErr)
+				return
+			}
+			defer wsConn.Close()
+			wshandleError(wsConn, preErr)
+			return
+		}
+	}
 	wsConn, err := upGrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		global.LOG.Errorf("gin context http handler failed, err: %v", err)

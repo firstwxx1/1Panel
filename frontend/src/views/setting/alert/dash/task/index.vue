@@ -60,7 +60,11 @@
                             <el-option value="clean" :label="$t('setting.diskClean')" />
                             <el-option value="snapshot" :label="$t('cronjob.snapshot')" />
                             <el-option value="ntp" :label="$t('cronjob.ntp')" />
-                            <el-option value="syncIpGroup" :label="$t('cronjob.syncIpGroup')" />
+                            <el-option
+                                v-if="dialogData.title === 'edit' && dialogData.rowData?.subType === 'syncIpGroup'"
+                                value="syncIpGroup"
+                                :label="$t('cronjob.syncIpGroup')"
+                            />
                             <el-option value="cleanLog" :label="$t('cronjob.cleanLog')" />
                         </el-select>
                     </el-form-item>
@@ -435,7 +439,7 @@ const ALL_SEND_METHOD = '__all__';
 
 const configOptions = computed(() => {
     return alertConfigs.value
-        .filter((c) => c.type !== 'common')
+        .filter((c) => c.type !== 'common' && c.type !== 'sms')
         .map((c) => ({
             value: String(c.id),
             label: getConfigOptionLabel(c),
@@ -586,7 +590,7 @@ const allTaskOptions = [
     {
         value: 'licenseException',
         label: 'xpack.alert.licenseException',
-        show: isMaster.value && isProductPro.value && !isEE.value,
+        show: false,
     },
     { value: 'ssl', label: 'xpack.alert.ssl', show: true },
     { value: 'siteEndTime', label: 'xpack.alert.siteEndTime', show: true },

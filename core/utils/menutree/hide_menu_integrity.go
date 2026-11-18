@@ -1,11 +1,29 @@
 package menutree
 
-import "github.com/1Panel-dev/1Panel/core/app/dto"
+import (
+	"slices"
+
+	"github.com/1Panel-dev/1Panel/core/app/dto"
+	"github.com/1Panel-dev/1Panel/core/global"
+)
 
 const (
 	xpackMenuID    = "11"
 	xpackMenuLabel = "Xpack-Menu"
+	xpackMenuTitle = "pro.menu"
 )
+
+type retiredMenuIdentity struct {
+	id    string
+	label string
+	paths []string
+}
+
+type proMenuSpec struct {
+	canonical    dto.ShowMenu
+	legacyLabels []string
+	legacyPaths  []string
+}
 
 func PreserveMissingMenus(menus, fallback []dto.ShowMenu) ([]dto.ShowMenu, bool) {
 	updated := cloneMenus(menus)
@@ -34,44 +52,33 @@ func preserveMissingMenus(root, current *[]dto.ShowMenu, fallback []dto.ShowMenu
 
 func ReconcileHideMenuIntegrity(menus, fallback []dto.ShowMenu) ([]dto.ShowMenu, bool) {
 	updated := cloneMenus(menus)
-	changed := false
-	if preferredXApp := findSystemMenu(updated, defaultXAppMenu()); preferredXApp != nil {
-		changed = normalizeSystemFields(preferredXApp, defaultXAppMenu())
-	}
-
-	var removed bool
-	updated, removed = removeSystemMenus(updated, retiredUpageMenuIdentity())
 	sanitizedFallback := cloneMenus(fallback)
-	if preferredFallbackXApp := findSystemMenu(sanitizedFallback, defaultXAppMenu()); preferredFallbackXApp != nil {
-		normalizeSystemFields(preferredFallbackXApp, defaultXAppMenu())
-	}
-	sanitizedFallback, _ = removeSystemMenus(sanitizedFallback, retiredUpageMenuIdentity())
-	changed = changed || removed
-	if existingXApp := findSystemMenu(updated, defaultXAppMenu()); existingXApp != nil {
-		normalized := normalizeSystemFields(existingXApp, defaultXAppMenu())
-		deduplicated, deduplicatedChanged := deduplicateSystemMenu(updated, existingXApp, defaultXAppMenu())
-		return deduplicated, changed || normalized || deduplicatedChanged
+	changed := false
+
+	for _, retired := range retiredMenuIdentities() {
+		var removed bool
+		updated, removed = removeRetiredMenus(updated, retired)
+		changed = changed || removed
+		sanitizedFallback, _ = removeRetiredMenus(sanitizedFallback, retired)
 	}
 
-	parentIndex := findXpackMenu(updated)
-	if parentIndex < 0 {
+	if xpackMenu := findMenuBy(updated, matchesXpackMenu); xpackMenu == nil {
 		parent := defaultXpackMenu()
-		fallbackParentIndex := findXpackMenu(sanitizedFallback)
-		if fallbackParentIndex >= 0 {
-			parent = cloneMenu(sanitizedFallback[fallbackParentIndex])
+		if fbParent := findMenuBy(sanitizedFallback, matchesXpackMenu); fbParent != nil {
+			parent.IsShow = fbParent.IsShow
+			parent.Sort = fbParent.Sort
 		}
 		updated = append(updated, parent)
-		parentIndex = len(updated) - 1
+		changed = true
+	} else if normalizeXpackParent(xpackMenu) {
 		changed = true
 	}
 
-	updated, xAppChanged := ensureSystemMenu(
-		updated,
-		parentIndex,
-		sanitizedFallback,
-		defaultXAppMenu(),
-	)
-	changed = changed || xAppChanged
+	for _, spec := range canonicalProMenuSpecs() {
+		var itemChanged bool
+		updated, itemChanged = ensureProMenu(updated, spec)
+		changed = changed || itemChanged
+	}
 
 	return updated, changed
 }
@@ -80,64 +87,84 @@ func defaultXpackMenu() dto.ShowMenu {
 	return dto.ShowMenu{
 		ID:       xpackMenuID,
 		Disabled: false,
-		Title:    "xpack.menu",
+		Title:    xpackMenuTitle,
 		IsShow:   true,
 		Label:    xpackMenuLabel,
 		Sort:     1100,
 	}
 }
 
-func defaultXAppMenu() dto.ShowMenu {
-	return dto.ShowMenu{
-		ID:       "118",
-		Disabled: false,
-		Title:    "xpack.app.app",
-		IsShow:   true,
-		Label:    "XApp",
-		Path:     "/xpack/app",
-		Sort:     100,
+func retiredMenuIdentities() []retiredMenuIdentity {
+	identities := []retiredMenuIdentity{
+		{id: "119", label: "Upage", paths: []string{"/xpack/upage"}},
+		{id: "118", label: "XApp", paths: []string{"/xpack/app"}},
+		{id: "123", label: "VirtualMachine", paths: []string{"/xpack/vm", "/enterprise/vm"}},
+		{id: "120", label: "Cluster", paths: []string{"/xpack/cluster"}},
+	}
+	if !global.CONF.Base.IsEnterprise {
+		identities = append(identities,
+			retiredMenuIdentity{id: "121", label: "UserManagement", paths: []string{"/enterprise/users"}},
+			retiredMenuIdentity{id: "122", label: "OpsReport", paths: []string{"/enterprise/ops-report"}},
+		)
+	}
+	return identities
+}
+
+func canonicalProMenuSpecs() []proMenuSpec {
+	return []proMenuSpec{
+		{
+			canonical:    dto.ShowMenu{ID: "112", Disabled: false, Title: "pro.waf.title", IsShow: true, Label: "ProWaf", Path: "/xpack/waf", Sort: 100},
+			legacyLabels: []string{"Dashboard"},
+			legacyPaths:  []string{"/xpack/waf/dashboard"},
+		},
+		{
+			canonical:    dto.ShowMenu{ID: "113", Disabled: false, Title: "pro.monitor.title", IsShow: true, Label: "ProMonitor", Path: "/xpack/monitor", Sort: 200},
+			legacyLabels: []string{"MonitorDashboard"},
+			legacyPaths:  []string{"/xpack/monitor/dashboard"},
+		},
+		{
+			canonical:    dto.ShowMenu{ID: "115", Disabled: false, Title: "pro.sync.title", IsShow: true, Label: "ProSync", Path: "/xpack/sync", Sort: 300},
+			legacyLabels: []string{"Sync"},
+			legacyPaths:  []string{"/xpack/sync"},
+		},
+		{
+			canonical:    dto.ShowMenu{ID: "114", Disabled: false, Title: "pro.tamper.title", IsShow: true, Label: "ProTamper", Path: "/xpack/tamper", Sort: 400},
+			legacyLabels: []string{"Tamper"},
+			legacyPaths:  []string{"/xpack/tamper"},
+		},
+		{
+			canonical:    dto.ShowMenu{ID: "116", Disabled: false, Title: "pro.alert.title", IsShow: true, Label: "ProAlert", Path: "/xpack/alert", Sort: 500},
+			legacyLabels: []string{"AlertDashboard", "Alert"},
+			legacyPaths:  []string{"/xpack/alert/dashboard"},
+		},
+		{
+			canonical:    dto.ShowMenu{ID: "117", Disabled: false, Title: "pro.uisetting.title", IsShow: true, Label: "ProUiSetting", Path: "/xpack/uisetting", Sort: 600},
+			legacyLabels: []string{"XSetting"},
+			legacyPaths:  []string{"/xpack/setting"},
+		},
+		{
+			canonical:    dto.ShowMenu{ID: "111", Disabled: false, Title: "pro.node.title", IsShow: true, Label: "NodeDashboard", Path: "/xpack/node", Sort: 700},
+			legacyLabels: []string{"NodeDashboard", "Node"},
+			legacyPaths:  []string{"/xpack/node/dashboard"},
+		},
 	}
 }
 
-func retiredUpageMenuIdentity() dto.ShowMenu {
-	return dto.ShowMenu{
-		ID:    "119",
-		Label: "Upage",
-		Path:  "/xpack/upage",
-	}
+func matchesXpackMenu(menu dto.ShowMenu) bool {
+	return menu.ID == xpackMenuID || menu.Label == xpackMenuLabel
 }
 
-func findXpackMenu(menus []dto.ShowMenu) int {
-	for i := range menus {
-		if menus[i].ID == xpackMenuID {
-			return i
-		}
-	}
-	for i := range menus {
-		if menus[i].Label == xpackMenuLabel {
-			return i
-		}
-	}
-	return -1
-}
+func normalizeXpackParent(menu *dto.ShowMenu) bool {
+	changed := menu.ID != xpackMenuID ||
+		menu.Label != xpackMenuLabel ||
+		menu.Title != xpackMenuTitle ||
+		menu.Disabled
 
-func findMenu(menus []dto.ShowMenu, canonical dto.ShowMenu) int {
-	for i := range menus {
-		if menus[i].ID == canonical.ID {
-			return i
-		}
-	}
-	for i := range menus {
-		if menus[i].Label == canonical.Label {
-			return i
-		}
-	}
-	for i := range menus {
-		if menus[i].Path == canonical.Path {
-			return i
-		}
-	}
-	return -1
+	menu.ID = xpackMenuID
+	menu.Label = xpackMenuLabel
+	menu.Title = xpackMenuTitle
+	menu.Disabled = false
+	return changed
 }
 
 func findMatchingMenu(menus []dto.ShowMenu, target dto.ShowMenu) int {
@@ -177,28 +204,30 @@ func containsMenu(menus []dto.ShowMenu, target dto.ShowMenu) bool {
 	return false
 }
 
-func ensureSystemMenu(menus []dto.ShowMenu, parentIndex int, fallback []dto.ShowMenu, canonical dto.ShowMenu) ([]dto.ShowMenu, bool) {
-	selected := findSystemMenu(menus, canonical)
+func ensureProMenu(menus []dto.ShowMenu, spec proMenuSpec) ([]dto.ShowMenu, bool) {
+	selected := findProMenu(menus, spec)
 	if selected == nil {
-		newItem := canonical
-		if fallbackItem := findSystemMenu(fallback, canonical); fallbackItem != nil {
-			newItem = cloneMenu(*fallbackItem)
-			normalizeSystemFields(&newItem, canonical)
+		xpackMenu := findMenuBy(menus, matchesXpackMenu)
+		if xpackMenu == nil {
+			menus = append(menus, defaultXpackMenu())
+			xpackMenu = &menus[len(menus)-1]
 		}
-		menus[parentIndex].Children = append(menus[parentIndex].Children, newItem)
+		xpackMenu.Children = append(xpackMenu.Children, cloneMenu(spec.canonical))
 		return menus, true
 	}
 
-	changed := normalizeSystemFields(selected, canonical)
-	deduplicated, deduplicatedChanged := deduplicateSystemMenu(menus, selected, canonical)
+	changed := normalizeSystemFields(selected, spec.canonical)
+	deduplicated, deduplicatedChanged := deduplicateProMenu(menus, selected, spec)
 	return deduplicated, changed || deduplicatedChanged
 }
 
-func findSystemMenu(menus []dto.ShowMenu, canonical dto.ShowMenu) *dto.ShowMenu {
+func findProMenu(menus []dto.ShowMenu, spec proMenuSpec) *dto.ShowMenu {
 	matchers := []func(dto.ShowMenu) bool{
-		func(menu dto.ShowMenu) bool { return menu.ID == canonical.ID },
-		func(menu dto.ShowMenu) bool { return menu.Label == canonical.Label },
-		func(menu dto.ShowMenu) bool { return menu.Path == canonical.Path },
+		func(menu dto.ShowMenu) bool { return spec.canonical.ID != "" && menu.ID == spec.canonical.ID },
+		func(menu dto.ShowMenu) bool { return spec.canonical.Label != "" && menu.Label == spec.canonical.Label },
+		func(menu dto.ShowMenu) bool { return menu.Label != "" && slices.Contains(spec.legacyLabels, menu.Label) },
+		func(menu dto.ShowMenu) bool { return spec.canonical.Path != "" && menu.Path == spec.canonical.Path },
+		func(menu dto.ShowMenu) bool { return menu.Path != "" && slices.Contains(spec.legacyPaths, menu.Path) },
 	}
 	for _, matches := range matchers {
 		if menu := findMenuBy(menus, matches); menu != nil {
@@ -220,16 +249,16 @@ func findMenuBy(menus []dto.ShowMenu, matches func(dto.ShowMenu) bool) *dto.Show
 	return nil
 }
 
-func deduplicateSystemMenu(menus []dto.ShowMenu, selected *dto.ShowMenu, canonical dto.ShowMenu) ([]dto.ShowMenu, bool) {
+func deduplicateProMenu(menus []dto.ShowMenu, selected *dto.ShowMenu, spec proMenuSpec) ([]dto.ShowMenu, bool) {
 	deduplicated := make([]dto.ShowMenu, 0, len(menus))
 	changed := false
 	for i := range menus {
 		menu := &menus[i]
-		if menu != selected && matchesSystemIdentity(*menu, canonical) {
+		if menu != selected && matchesProMenu(*menu, spec) {
 			changed = true
 			continue
 		}
-		children, childChanged := deduplicateSystemMenu(menu.Children, selected, canonical)
+		children, childChanged := deduplicateProMenu(menu.Children, selected, spec)
 		if childChanged {
 			menu.Children = children
 			changed = true
@@ -239,7 +268,26 @@ func deduplicateSystemMenu(menus []dto.ShowMenu, selected *dto.ShowMenu, canonic
 	return deduplicated, changed
 }
 
-func removeSystemMenus(menus []dto.ShowMenu, identity dto.ShowMenu) ([]dto.ShowMenu, bool) {
+func matchesProMenu(menu dto.ShowMenu, spec proMenuSpec) bool {
+	if spec.canonical.ID != "" && menu.ID == spec.canonical.ID {
+		return true
+	}
+	if spec.canonical.Label != "" && menu.Label == spec.canonical.Label {
+		return true
+	}
+	if menu.Label != "" && slices.Contains(spec.legacyLabels, menu.Label) {
+		return true
+	}
+	if spec.canonical.Path != "" && menu.Path == spec.canonical.Path {
+		return true
+	}
+	if menu.Path != "" && slices.Contains(spec.legacyPaths, menu.Path) {
+		return true
+	}
+	return false
+}
+
+func removeRetiredMenus(menus []dto.ShowMenu, identity retiredMenuIdentity) ([]dto.ShowMenu, bool) {
 	if menus == nil {
 		return nil, false
 	}
@@ -247,8 +295,8 @@ func removeSystemMenus(menus []dto.ShowMenu, identity dto.ShowMenu) ([]dto.ShowM
 	changed := false
 	for i := range menus {
 		menu := &menus[i]
-		children, childChanged := removeSystemMenus(menu.Children, identity)
-		if matchesSystemIdentity(*menu, identity) {
+		children, childChanged := removeRetiredMenus(menu.Children, identity)
+		if matchesRetiredIdentity(*menu, identity) {
 			filtered = append(filtered, children...)
 			changed = true
 			continue
@@ -262,8 +310,17 @@ func removeSystemMenus(menus []dto.ShowMenu, identity dto.ShowMenu) ([]dto.ShowM
 	return filtered, changed
 }
 
-func matchesSystemIdentity(menu, canonical dto.ShowMenu) bool {
-	return menu.ID == canonical.ID || menu.Label == canonical.Label || menu.Path == canonical.Path
+func matchesRetiredIdentity(menu dto.ShowMenu, identity retiredMenuIdentity) bool {
+	if identity.id != "" && menu.ID == identity.id {
+		return true
+	}
+	if identity.label != "" && menu.Label == identity.label {
+		return true
+	}
+	if menu.Path != "" && slices.Contains(identity.paths, menu.Path) {
+		return true
+	}
+	return false
 }
 
 func normalizeSystemFields(menu *dto.ShowMenu, canonical dto.ShowMenu) bool {

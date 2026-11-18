@@ -1578,6 +1578,9 @@ func saveCertificateFile(websiteSSL *model.WebsiteSSL, logger *log.Logger) {
 }
 
 func GetSystemSSL() (bool, uint) {
+	if !global.IsMaster || global.CoreDB == nil {
+		return false, 0
+	}
 	var sslSetting model.Setting
 	_ = global.CoreDB.Model(&model.Setting{}).Where("key = ?", "SSL").First(&sslSetting).Error
 	if sslSetting.Value == "Enable" || sslSetting.Value == "Mux" {

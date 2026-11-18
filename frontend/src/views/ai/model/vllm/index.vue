@@ -1,7 +1,7 @@
 <template>
     <div>
         <LayoutContent title="vLLM">
-            <template #leftToolBar>
+            <template #leftToolBar v-if="!isProductPro">
                 <el-button type="primary" @click="goLicense">
                     {{ $t('license.levelUpPro') }}
                 </el-button>
@@ -39,7 +39,10 @@
 </template>
 
 <script setup lang="ts">
+import { useGlobalStore } from '@/composables/useGlobalStore';
 import { routerToName } from '@/utils/router';
+
+const { isProductPro } = useGlobalStore();
 
 const features = [
     { icon: 'p-ai-1', title: 'xpack.helper.vllmTitle1', content: 'xpack.helper.vllmContent1' },

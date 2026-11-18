@@ -25,11 +25,6 @@
                             />
                             <el-option value="panelLogin" :label="$t('xpack.alert.panelLogin')" />
                             <el-option
-                                v-if="isProductPro && !isEE"
-                                value="licenseException"
-                                :label="$t('xpack.alert.licenseException')"
-                            />
-                            <el-option
                                 v-if="isProductPro"
                                 value="nodeException"
                                 :label="$t('xpack.alert.nodeException')"

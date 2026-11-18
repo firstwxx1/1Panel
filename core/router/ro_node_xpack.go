@@ -176,6 +176,15 @@ func (r *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 	}
 	auth.GET("licenses/status", licenseOK)
 	auth.GET("licenses/master/status", licenseOK)
+	auth.POST("licenses/search", func(c *gin.Context) {
+		helper.SuccessWithData(c, gin.H{"total": 0, "items": []interface{}{}})
+	})
+	auth.GET("licenses/options", func(c *gin.Context) {
+		helper.SuccessWithData(c, []interface{}{})
+	})
+	auth.GET("licenses/sms/info", func(c *gin.Context) {
+		helper.SuccessWithData(c, gin.H{"smsUsed": 0, "smsTotal": 0})
+	})
 
 	x := Router.Group("xpack").Use(middleware.SessionAuth()).Use(middleware.PasswordExpired())
 	for _, kind := range []string{"nodes", "panels"} {
@@ -337,6 +346,9 @@ func (r *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 	// interface settings; search is public because the login page needs it
 	Router.GET("xpack/settings/search", func(c *gin.Context) { helper.SuccessWithData(c, node.UIGetSettings()) })
 	x.GET("settings/app/local-sync", func(c *gin.Context) { helper.SuccessWithData(c, gin.H{"enabled": false}) })
+	x.POST("settings/app/local-sync", func(c *gin.Context) { helper.Success(c) })
+	x.POST("settings/app/local-sync/dispatch", func(c *gin.Context) { helper.Success(c) })
+	x.GET("settings/proxy", func(c *gin.Context) { helper.SuccessWithData(c, gin.H{"proxyDocker": node.GetProxyDockerStatus()}) })
 	x.POST("settings/update", func(c *gin.Context) {
 		var req struct {
 			Key   string `json:"key"`
@@ -390,6 +402,7 @@ func (r *NodeRouter) InitRouter(Router *gin.RouterGroup) {
 		node.ClearAlertRecords()
 		helper.Success(c)
 	})
+	x.POST("alert/offline/sync", func(c *gin.Context) { helper.Success(c) })
 	x.GET("sync/tasks", func(c *gin.Context) { helper.SuccessWithData(c, node.SyncTasks()) })
 	x.POST("sync/tasks/cancel", func(c *gin.Context) {
 		var req struct {

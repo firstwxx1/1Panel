@@ -21,6 +21,9 @@ import (
 )
 
 func GetUpgradeVersionInfo() (*dto.UpgradeInfo, error) {
+	if global.CoreDB == nil {
+		return &dto.UpgradeInfo{}, nil
+	}
 	var upgrade dto.UpgradeInfo
 	var currentVersion model.Setting
 	if err := global.CoreDB.Model(&model.Setting{}).Where("key = ?", "SystemVersion").First(&currentVersion).Error; err != nil {
